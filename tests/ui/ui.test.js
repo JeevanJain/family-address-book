@@ -64,6 +64,13 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
   async function listIs(n) {
     await until((x) => document.querySelector('p[role=status]') && document.querySelector('ul.list') && document.querySelectorAll('ul.list li').length === x, n);
   }
+  /** Open the header's More menu (Users, Change password, Export CSV, Log out live there). */
+  async function openMore() {
+    await page.waitForSelector('#more-btn');
+    if (await page.$eval('#more-btn', (b) => b.getAttribute('aria-expanded')) !== 'true') await page.click('#more-btn');
+    await until(() => document.getElementById('more-menu') && !document.getElementById('more-menu').hidden);
+  }
+  async function menuGo(label) { await openMore(); await clickText('#more-menu a, #more-menu button', label); }
   const ADDR = { first_name: 'Test', surname: 'User', address_line1: '1 Example Road', city: 'Exampleville', state: 'Karnataka', pin: '560001', phone: '9876543210' };
 
   before(async () => {
@@ -129,16 +136,75 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     await login(srv.owner.email, srv.owner.password);
     await waitH1('Addresses');
     assert.equal(await page.$eval('#top', (e) => e.hidden), false);
+    await until(() => document.querySelector('p[role=status]')?.textContent === 'No addresses yet.');
+    // empty state invites the first entry
+    assert.match(await page.$eval('.empty', (e) => e.innerText), /Add the first address/);
+    assert.equal(await page.$eval('.empty a', (a) => a.getAttribute('href')), '#/new');
+    // primary navigation is always visible; the rest is under "More"
+    const primary = await page.$$eval('#top nav[aria-label=Main] a', (els) => els.map((e) => e.textContent.trim()));
+    assert.deepEqual(primary, ['Addresses', 'Add', 'Labels']);
+    assert.equal(await page.$eval('#top a.tab.current', (a) => a.getAttribute('aria-current')), 'page');
+    assert.equal(await page.$eval('#more-menu', (e) => e.hidden), true, 'More menu starts closed');
+    await openMore();
     assert.match(await text(), /Signed in as Owner \(owner\)/);
-    await until(() => document.querySelector('p[role=status]')?.textContent === 'No addresses found.');
-    const navLinks = await page.$$eval('#top nav a, #top nav button', (els) => els.map((e) => e.textContent.trim()));
-    for (const l of ['Addresses', 'Add', 'Labels', 'Users', 'Export CSV', 'Password', 'Log out']) assert.ok(navLinks.includes(l), l);
+    const more = await page.$$eval('#more-menu a, #more-menu button', (els) => els.map((e) => e.textContent.trim()));
+    assert.deepEqual(more, ['Users', 'Change password', 'Export CSV', 'Log out']);
+    assert.equal(await page.$eval('#more-menu a[download]', (a) => a.getAttribute('href')), '/api/export.csv');
+    await page.keyboard.press('Escape');
+    await until(() => document.getElementById('more-menu').hidden);
   });
 
   it('reloading the page keeps the session (cookie accepted by the browser)', async () => {
     await page.reload();
     await waitH1('Addresses');
+    await openMore();
     assert.match(await text(), /Signed in as Owner/);
+    await page.keyboard.press('Escape');
+  });
+
+  it('More menu opens and closes by click and by keyboard (no hover needed)', async () => {
+    const st = () => page.evaluate(() => ({
+      expanded: document.getElementById('more-btn').getAttribute('aria-expanded'),
+      hidden: document.getElementById('more-menu').hidden,
+      focus: document.activeElement?.id || document.activeElement?.textContent.trim(),
+    }));
+    assert.equal(await page.$eval('#more-btn', (b) => b.getAttribute('aria-controls')), 'more-menu');
+    assert.deepEqual(await st().then((s) => [s.expanded, s.hidden]), ['false', true]);
+    // click toggles
+    await page.click('#more-btn');
+    assert.deepEqual(await st().then((s) => [s.expanded, s.hidden]), ['true', false]);
+    await page.click('#more-btn');
+    assert.deepEqual(await st().then((s) => [s.expanded, s.hidden]), ['false', true]);
+    // click outside closes
+    await page.click('#more-btn');
+    await page.click('h1');
+    assert.deepEqual(await st().then((s) => [s.expanded, s.hidden]), ['false', true]);
+    // keyboard: Enter opens, Escape closes and returns focus to the button
+    await page.focus('#more-btn');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await st().then((s) => [s.expanded, s.hidden]), ['true', false]);
+    await page.keyboard.press('Escape');
+    assert.deepEqual(await st(), { expanded: 'false', hidden: true, focus: 'more-btn' });
+    // ArrowDown opens and focuses the first item; Tab moves through the items; tabbing out closes
+    await page.keyboard.press('ArrowDown');
+    assert.deepEqual(await st(), { expanded: 'true', hidden: false, focus: 'Users' });
+    for (const next of ['Change password', 'Export CSV', 'Log out']) {
+      await page.keyboard.press('Tab');
+      assert.equal((await st()).focus, next);
+    }
+    await page.keyboard.press('Tab');
+    await until(() => document.getElementById('more-menu').hidden);
+    assert.equal((await st()).expanded, 'false');
+    // Enter on an item follows it
+    await page.focus('#more-btn');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Enter');
+    await waitH1('Change password');
+    assert.equal(await page.$eval('#more-menu', (e) => e.hidden), true);
+    assert.equal(await page.$eval('#more-btn', (b) => b.classList.contains('current')), true, 'More marks itself as the current section');
+    await clickText('#top a', 'Addresses');
+    await waitH1('Addresses');
   });
 
   // ---------- add ----------
@@ -233,7 +299,8 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     await listIs(1);
     await fill('#q', ''); await page.type('#q', 'nothingmatchesthis');
     await listIs(0);
-    assert.equal(await status(), 'No addresses found.');
+    assert.equal(await status(), 'No addresses match your search.');
+    assert.ok(await page.$eval('.empty', (e) => !e.hidden && e.innerText.includes('Clear search')), 'no-results state offers Clear search');
     await fill('#q', ''); await page.type('#q', 'Example');
     await listIs(2);
     await fill('#q', '');
@@ -293,7 +360,7 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
 
   // ---------- users ----------
   it('users view lists the owner; adding a co-user shows the one-time password', async () => {
-    await clickText('#top a', 'Users');
+    await menuGo('Users');
     await waitH1('Users');
     await until(() => document.querySelectorAll('li.user').length === 1);
     assert.match(await page.$eval('li.user', (e) => e.innerText), /Owner[\s\S]*owner/);
@@ -363,7 +430,7 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
 
   // ---------- logout / member ----------
   it('logout returns to the login view and hides the nav', async () => {
-    await clickText('#top button', 'Log out');
+    await menuGo('Log out');
     await waitH1('Family Address Book');
     assert.equal(await page.$eval('#top', (e) => e.hidden), true);
     // going to a protected route now bounces to login
@@ -401,8 +468,10 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     await page.click('button[type=submit]');
     await waitH1('Addresses');
     assert.equal(await page.$eval('#top', (e) => e.hidden), false);
+    await openMore();
     assert.match(await text(), /Signed in as Test Member/);
     assert.doesNotMatch(await text(), /\(owner\)/);
+    await page.keyboard.press('Escape');
     assert.equal((await new Client(srv.baseUrl, 'x').login('ui-member@example.com', MEMBER_NEW_PW)).status, 200);
   });
 
@@ -423,10 +492,11 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
   });
 
   it('member sees the users list without disable/reset buttons, and can add a co-user', async () => {
-    await clickText('#top a', 'Users');
+    await menuGo('Users');
     await waitH1('Users');
     await until(() => document.querySelectorAll('li.user').length === 2);
     assert.equal(await page.$$eval('li.user button', (b) => b.length), 0);
+    assert.equal(await page.$$eval('li.user .owner-actions', (b) => b.length), 0, 'no owner-actions area for members');
     await fill('#name', 'Test Added By Member'); await fill('#new_email', 'by-member@example.com');
     await clickText('button', 'Add user');
     await until(() => document.getElementById('secret-pw'));
@@ -551,6 +621,31 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       await fill('#start_at', '1');
     });
 
+    it('the on-screen sheet preview marks the slots that will be filled for a given start position', async () => {
+      // u = left blank (already used), F = will be printed, . = stays empty
+      const marks = () => page.$$eval('.sheet .slot', (s) => s.map((e) => (e.classList.contains('is-filled') ? 'F' : e.classList.contains('is-used') ? 'u' : '.')).join(''));
+      const note = () => page.$eval('#sheet-note', (e) => e.textContent);
+      assert.equal(await page.$$eval('.sheet .slot', (s) => s.length), 21);
+      assert.equal(await page.$eval('.sheet', (e) => e.getAttribute('aria-hidden')), 'true', 'picture is decorative; the note carries the information');
+      assert.equal(await marks(), `${'F'.repeat(9)}${'.'.repeat(12)}`);
+      await fill('#start_at', '20');
+      assert.equal(await marks(), `${'u'.repeat(19)}FF`);
+      assert.deepEqual(await page.$$eval('.sheet .slot.is-filled', (s) => s.map((e) => [e.dataset.slot, e.querySelector('.slot-name').textContent])),
+        [['20', 'Bulk01 Label'], ['21', 'Bulk02 Label']], 'same slots as the PDF test above');
+      assert.equal(await note(), 'Sheet 1: labels 20 to 21 will be printed. Labels 1 to 19 stay blank. 7 more labels go on sheet 2.');
+      await fill('#start_at', '5');
+      assert.equal(await marks(), `uuuu${'F'.repeat(9)}${'.'.repeat(8)}`);
+      // tapping a slot on the picture sets the start position
+      await page.click('.sheet .slot[data-slot="10"]');
+      assert.equal(await page.$eval('#start_at', (e) => e.value), '10');
+      assert.equal(await marks(), `${'u'.repeat(9)}${'F'.repeat(9)}...`);
+      // invalid input: nothing marked, and the note says what to enter
+      await fill('#start_at', '0');
+      assert.equal(await marks(), '.'.repeat(21));
+      assert.match(await note(), /Enter a label number from 1 to 21/);
+      await fill('#start_at', '1');
+    });
+
     it('the whole 24-entry group: 24 labels on a 2-page PDF (21 + 3)', async () => {
       await backToList();
       await until(() => document.querySelector('#group option[value=Bulk]'));
@@ -571,22 +666,39 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     it('ticked entries only: 2 ticked -> 2 labels; nothing ticked -> message', async () => {
       await backToList();
       await listIs(24);
-      await page.click('input[aria-label="Tick Bulk03 Label"]');
-      await page.click('input[aria-label="Tick Bulk05 Label"]');
-      await until(() => document.body.innerText.includes('2 ticked'));
-      await openLabels();
-      assert.match(await text(), /Only ticked entries \(2\)/);
+      assert.equal(await page.$eval('.selbar', (e) => e.hidden), true, 'no selection bar while nothing is selected');
+      await page.click('input[aria-label="Select Bulk03 Label"]');
+      await page.click('input[aria-label="Select Bulk05 Label"]');
+      await until(() => document.body.innerText.includes('2 selected'));
+      // the sticky bar appears, sits at the bottom of the viewport, and leads to the labels view
+      await until(() => document.querySelector('.selbar').getAnimations().every((x) => x.playState === 'finished'));
+      const bar = await page.$eval('.selbar', (e) => ({ hidden: e.hidden, pos: getComputedStyle(e).position, bottom: Math.round(e.getBoundingClientRect().bottom), vh: innerHeight, text: e.innerText.replace(/\s+/g, ' ').trim() }));
+      assert.equal(bar.hidden, false);
+      assert.equal(bar.pos, 'fixed');
+      assert.equal(bar.bottom, bar.vh);
+      assert.match(bar.text, /^2 selected Clear Print labels$/);
+      assert.equal(await page.$$eval('li.entry-card.is-selected', (l) => l.length), 2, 'selected rows are highlighted');
+      await clickText('.selbar a', 'Print labels');
+      await waitH1('Print labels');
+      assert.match(await text(), /Only selected addresses \(2\)/);
+      assert.equal(await page.$eval('#mode-ticked', (e) => e.checked), true, 'selected addresses are preselected when there is a selection');
       await page.click('#mode-ticked');
       const pdf = await generate();
       assert.match(await notice(), /2 labels on 1 sheet\./);
       assert.equal(pdf.pages, 1);
       assert.deepEqual(allTexts(pdf).filter((t) => t.t.startsWith('Bulk')).map((t) => t.t), ['Bulk03 Label', 'Bulk05 Label']);
       await backToList();
-      await clickText('button', 'Clear ticks');
+      // "Select all shown" selects every listed entry; "Clear" in the bar empties the selection and hides the bar
+      await clickText('button', 'Select all shown');
+      await until(() => document.querySelector('.sel-count')?.textContent === '24 selected');
+      await clickText('.selbar button', 'Clear');
+      await until(() => document.querySelector('.selbar').hidden);
+      assert.equal(await page.$$eval('ul.list input[type=checkbox]:checked', (l) => l.length), 0);
       await openLabels();
+      assert.equal(await page.$eval('#mode-filter', (e) => e.checked), true);
       await page.click('#mode-ticked');
       await page.click('form button[type=submit]');
-      await until(() => document.querySelector('p.error')?.textContent === 'No entries are ticked.');
+      await until(() => document.querySelector('p.error')?.textContent === 'No addresses are selected.');
     });
   });
 
@@ -608,7 +720,7 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     await clickText('ul.list a.entry', '<img', false);
     await waitH1('Edit address');
     assert.equal(await page.$eval('#address_line1', (e) => e.value), '<script>window.__xss=2</script>');
-    await clickText('#top a', 'Users');
+    await menuGo('Users');
     await waitH1('Users');
     await until(() => [...document.querySelectorAll('li.user')].some((l) => l.innerText.includes('<i onclick')));
     assert.equal(await page.$$eval('li.user i', (e) => e.length), 0);
@@ -618,14 +730,18 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
   it('360 px wide: no horizontal scrolling on any view; inputs and buttons are tappable', async () => {
     await page.setViewport({ width: 360, height: 740 });
     const problems = [];
-    for (const [hash, h] of [['#/', 'Addresses'], ['#/new', 'Add address'], ['#/labels', 'Print labels'], ['#/users', 'Users'], ['#/password', 'Change password']]) {
+    const views = [['#/', 'Addresses'], ['#/', 'Addresses', 'more'], ['#/', 'Addresses', 'selected'], ['#/new', 'Add address'],
+      [`#/edit/${firstAddressId}`, 'Edit address'], ['#/labels', 'Print labels'], ['#/users', 'Users'], ['#/password', 'Change password']];
+    for (const [hash, h, extra] of views) {
       await goHash(hash);
       await waitH1(h);
+      if (extra === 'more') await openMore();
+      if (extra === 'selected') { await until(() => document.querySelector('ul.list input[type=checkbox]')); await page.click('ul.list input[type=checkbox]'); }
       await new Promise((r) => setTimeout(r, 300));
       if (process.env.UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.UI_SCREENSHOTS, `view-${h.replace(/\W+/g, '-')}.png`) });
       const m = await page.evaluate(() => ({
         sw: document.documentElement.scrollWidth,
-        small: [...document.querySelectorAll('main button, main input:not([type=checkbox]):not([type=radio]), main select, main textarea, main a.btn')]
+        small: [...document.querySelectorAll('main button, main input:not([type=checkbox]):not([type=radio]), main select, main textarea, main a.btn, main a.tel, #top a, #top button')]
           .filter((e) => e.getBoundingClientRect().height > 0 && e.getBoundingClientRect().height < 40)
           .map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}:${Math.round(e.getBoundingClientRect().height)}px`),
       }));
@@ -633,11 +749,40 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
         const wide = await page.evaluate(() => [...document.querySelectorAll('body *')]
           .filter((e) => e.getBoundingClientRect().right > 361)
           .slice(0, 6).map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}${e.className ? '.' + e.className : ''} right=${Math.round(e.getBoundingClientRect().right)} text="${(e.textContent || '').trim().slice(0, 40)}"`));
-        problems.push(`${hash}: scrollWidth ${m.sw} > 360; elements past the edge: ${wide.join(' | ')}`);
+        problems.push(`${hash}${extra || ''}: scrollWidth ${m.sw} > 360; elements past the edge: ${wide.join(' | ')}`);
       }
-      if (m.small.length) problems.push(`${hash}: controls under 40px tall: ${m.small.join(', ')}`);
+      if (m.small.length) problems.push(`${hash}${extra || ''}: controls under 40px tall: ${m.small.join(', ')}`);
+      if (extra === 'more') {
+        const r = await page.$eval('#more-menu', (e) => { const b = e.getBoundingClientRect(); return [b.left, b.right]; });
+        if (r[0] < 0 || r[1] > 360) problems.push(`More menu outside the viewport: ${r}`);
+        await page.keyboard.press('Escape');
+      }
+      if (extra === 'selected') await clickText('.selbar button', 'Clear');
     }
     assert.deepEqual(problems, []);
+  });
+
+  it('360 px wide: the login view fits too (fresh, logged-out browser context)', async () => {
+    const ctx = await browser.createBrowserContext();
+    const p = await ctx.newPage();
+    p.on('console', (m) => { if (/Content[- ]Security[- ]Policy|Refused to/i.test(m.text())) cspViolations.push(m.text()); });
+    p.on('pageerror', (e) => pageErrors.push(String(e)));
+    try {
+      await p.setViewport({ width: 360, height: 740 });
+      await p.goto(`${srv.baseUrl}/`);
+      await p.waitForFunction(() => document.querySelector('h1')?.textContent === 'Family Address Book', { timeout: 10000 });
+      if (process.env.UI_SCREENSHOTS) await p.screenshot({ path: join(process.env.UI_SCREENSHOTS, 'view-Login.png') });
+      const m = await p.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        btn: document.querySelector('button[type=submit]').getBoundingClientRect().height,
+        labelled: ['email', 'password'].every((id) => document.querySelector(`label[for=${id}]`)),
+      }));
+      assert.ok(m.sw <= 360, `scrollWidth ${m.sw}`);
+      assert.ok(m.btn >= 44, `login button ${m.btn}px`);
+      assert.ok(m.labelled, 'inputs have labels');
+    } finally {
+      await ctx.close();
+    }
   });
 
   it('phone and PIN inputs have mobile keyboard hints', async () => {

@@ -111,22 +111,101 @@ function validateAddress(v) {
   return errors;
 }
 
+// ---------- icons (inline SVG built with DOM APIs; no innerHTML, no inline styles) ----------
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
+  el.append(...kids);
+  return el;
+}
+const ICONS = {
+  phone: { fill: 'M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.6 21 3 13.4 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z' },
+  down: { stroke: 'M6 9l6 6 6-6' },
+  right: { stroke: 'M9 6l6 6-6 6' },
+  plus: { stroke: 'M12 5v14M5 12h14' },
+  alert: { stroke: 'M12 3.5 2.5 20h19L12 3.5zM12 10v4.5M12 17.3v.2' },
+  envelope: { stroke: 'M3.5 6.5h17v11h-17zM3.5 7.5l8.5 6 8.5-6' },
+  printer: { stroke: 'M7 9V4h10v5M7 17H5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M7 14h10v6H7z' },
+};
+function icon(name, cls = 'icon') {
+  const p = ICONS[name];
+  const path = p.fill
+    ? s('path', { d: p.fill, fill: 'currentColor' })
+    : s('path', { d: p.stroke, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+  return s('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true', focusable: 'false' }, path);
+}
+/** The app's mark: a postage stamp with a house on it. Perforations are drawn in the background colour. */
+function stampMark(cls) {
+  return s('svg', { viewBox: '0 0 40 48', class: `stamp ${cls}`, 'aria-hidden': 'true', focusable: 'false' },
+    s('rect', { x: 2, y: 2, width: 36, height: 44, class: 'stamp-paper' }),
+    s('rect', { x: 2, y: 2, width: 36, height: 44, class: 'stamp-perf', fill: 'none', 'stroke-width': 3.2, 'stroke-dasharray': '2.6 2.4' }),
+    s('rect', { x: 7.5, y: 7.5, width: 25, height: 33, class: 'stamp-line', fill: 'none', 'stroke-width': 1.2 }),
+    s('path', { d: 'M12.5 26.5 20 20l7.5 6.5M15 24.5V33h10v-8.5', class: 'stamp-line', fill: 'none', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+}
+
+const fullName = (a) => [a.first_name, a.surname].filter(Boolean).join(' ');
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
 // ---------- shared UI pieces ----------
+let closeMenu = null; // set while the More menu exists
+document.addEventListener('click', (e) => {
+  if (closeMenu && !(e.target instanceof Element && e.target.closest('.more'))) closeMenu(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && closeMenu) closeMenu(true);
+});
+
 function renderTop() {
   clear(topEl);
+  closeMenu = null;
   if (!me || me.must_change_password) { topEl.hidden = true; return; }
   topEl.hidden = false;
   const cur = location.hash || '#/';
-  const link = (href, text, match) => h('a', { href, class: match.test(cur) ? 'current' : '' , text });
-  topEl.append(h('nav', { 'aria-label': 'Main' },
-    link('#/', 'Addresses', /^#\/?$|^#\/edit/),
-    link('#/new', 'Add', /^#\/new/),
-    link('#/labels', 'Labels', /^#\/labels/),
-    link('#/users', 'Users', /^#\/users/),
-    h('a', { href: '/api/export.csv', download: 'addresses.csv', text: 'Export CSV' }),
-    h('a', { href: '#/password', text: 'Password' }),
-    h('button', { type: 'button', class: 'link', onclick: logout, text: 'Log out' }),
-    h('span', { class: 'who', text: `Signed in as ${me.name}${me.role === 'owner' ? ' (owner)' : ''}` })));
+  const tab = (href, text, match) => {
+    const on = match.test(cur);
+    return h('li', null, h('a', { href, class: on ? 'tab current' : 'tab', 'aria-current': on ? 'page' : undefined, text }));
+  };
+  const item = (href, text, match, extra) => {
+    const on = match && match.test(cur);
+    return h('li', null, h('a', { href, 'aria-current': on ? 'page' : undefined, text, ...extra }));
+  };
+  const inMore = /^#\/(users|password)/.test(cur);
+
+  const btn = h('button', { type: 'button', id: 'more-btn', class: inMore ? 'more-btn current' : 'more-btn', 'aria-expanded': 'false', 'aria-controls': 'more-menu' },
+    h('span', { text: 'More' }), icon('down'));
+  const panel = h('div', { id: 'more-menu', class: 'more-menu', hidden: true },
+    h('p', { class: 'who' }, 'Signed in as ', h('strong', { text: me.name }), me.role === 'owner' ? ' (owner)' : ''),
+    h('ul', null,
+      item('#/users', 'Users', /^#\/users/),
+      item('#/password', 'Change password', /^#\/password/),
+      item('/api/export.csv', 'Export CSV', null, { download: 'addresses.csv' }),
+      h('li', { class: 'sep' }, h('button', { type: 'button', onclick: logout, text: 'Log out' }))));
+  const wrap = h('div', { class: 'more' }, btn, panel);
+
+  const setOpen = (open, focusButton) => {
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+    if (!open && focusButton) btn.focus();
+  };
+  closeMenu = (focusButton) => { if (!panel.hidden) setOpen(false, focusButton); };
+  btn.addEventListener('click', () => setOpen(panel.hidden));
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); panel.querySelector('a, button').focus(); }
+  });
+  // Close when keyboard focus leaves the menu, or once an item has been chosen.
+  wrap.addEventListener('focusout', (e) => { if (e.relatedTarget && !wrap.contains(e.relatedTarget)) setOpen(false); });
+  panel.addEventListener('click', (e) => { if (e.target instanceof Element && e.target.closest('a')) setOpen(false); });
+
+  topEl.append(h('div', { class: 'topbar-inner' },
+    h('div', { class: 'topbar-row' },
+      h('a', { class: 'brand', href: '#/' }, stampMark('stamp-sm'), h('span', { text: 'Family Address Book' })),
+      h('nav', { 'aria-label': 'Account' }, wrap)),
+    h('nav', { 'aria-label': 'Main' },
+      h('ul', { class: 'tabs' },
+        tab('#/', 'Addresses', /^#\/?$|^#\/edit/),
+        tab('#/new', 'Add', /^#\/new/),
+        tab('#/labels', 'Labels', /^#\/labels/)))));
 }
 
 async function logout() {
@@ -138,21 +217,23 @@ async function logout() {
 
 function errorBox(msg) { return h('p', { class: 'error', role: 'alert', text: msg }); }
 
-function field({ id, label, type = 'text', value = '', autocomplete, inputmode, required, maxlength, list, error, textarea, hint }) {
+function field({ id, label, type = 'text', value = '', autocomplete, inputmode, required, maxlength, list, error, textarea, hint, cls }) {
   const errId = `${id}-err`;
+  const hintId = hint ? `${id}-hint` : null;
+  const describedBy = [hintId, error ? errId : null].filter(Boolean).join(' ') || undefined;
   const attrs = {
     id, name: id, value: textarea ? undefined : value, autocomplete, inputmode, maxlength, list,
     type: textarea ? undefined : type, required: required ? true : undefined,
     'aria-invalid': error ? 'true' : undefined,
-    'aria-describedby': error ? errId : undefined,
+    'aria-describedby': describedBy,
     autocapitalize: type === 'email' ? 'off' : undefined,
     spellcheck: type === 'email' || type === 'password' ? 'false' : undefined,
   };
   const input = textarea ? h('textarea', { ...attrs, rows: 3 }) : h('input', attrs);
   if (textarea) input.value = value;
-  return h('div', { class: 'field' },
-    h('label', { for: id, text: label + (required ? ' *' : '') }),
-    hint ? h('div', { class: 'muted', text: hint }) : null,
+  return h('div', { class: cls ? `field ${cls}` : 'field' },
+    h('label', { for: id }, label, required ? h('span', { class: 'req', 'aria-hidden': 'true', text: ' *' }) : null),
+    hint ? h('div', { class: 'hint', id: hintId, text: hint }) : null,
     input,
     h('div', { class: 'field-error', id: errId, text: error || '' }));
 }
@@ -162,8 +243,10 @@ function setFieldError(form, name, msg) {
   const err = document.getElementById(`${name}-err`);
   if (err) err.textContent = msg || '';
   if (input) {
-    if (msg) { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', `${name}-err`); }
-    else { input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby'); }
+    const hint = document.getElementById(`${name}-hint`) ? `${name}-hint` : '';
+    const ids = [hint, msg ? `${name}-err` : ''].filter(Boolean).join(' ');
+    if (msg) input.setAttribute('aria-invalid', 'true'); else input.removeAttribute('aria-invalid');
+    if (ids) input.setAttribute('aria-describedby', ids); else input.removeAttribute('aria-describedby');
   }
 }
 
@@ -181,11 +264,12 @@ async function copyText(text, input) {
 
 // ---------- views ----------
 function viewLogin() {
-  const msg = h('div');
-  const form = h('form', { novalidate: true },
+  const msg = h('div', { class: 'msg' });
+  const form = h('form', { novalidate: true, class: 'panel' },
     field({ id: 'email', label: 'Email', type: 'email', autocomplete: 'username', inputmode: 'email', required: true }),
     field({ id: 'password', label: 'Password', type: 'password', autocomplete: 'current-password', required: true }),
-    h('div', { class: 'row' }, h('button', { type: 'submit', class: 'primary', text: 'Log in' })));
+    msg,
+    h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'primary wide', text: 'Log in' })));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     clear(msg);
@@ -202,18 +286,24 @@ function viewLogin() {
       btn.disabled = false;
     }
   });
-  appEl.append(h('h1', { text: 'Family Address Book' }), form, msg);
+  appEl.append(h('div', { class: 'login' },
+    stampMark('stamp-lg'),
+    h('h1', { text: 'Family Address Book' }),
+    h('p', { class: 'lede', text: 'Addresses for the whole family, kept in one place. Only invited family members can log in.' }),
+    form,
+    h('p', { class: 'aside', text: 'Forgotten your password? Ask the person who looks after this address book to reset it.' })));
 }
 
 function viewPassword() {
   const forced = !!me.must_change_password;
-  const msg = h('div');
-  const form = h('form', { novalidate: true },
-    forced ? h('p', { class: 'notice', text: 'Please choose your own password before continuing.' }) : null,
+  const msg = h('div', { class: 'msg' });
+  const form = h('form', { novalidate: true, class: 'panel' },
+    forced ? h('p', { class: 'notice info', text: 'Please choose your own password before continuing.' }) : null,
     field({ id: 'current_password', label: 'Current password', type: 'password', autocomplete: 'current-password', required: true }),
     field({ id: 'new_password', label: 'New password', type: 'password', autocomplete: 'new-password', required: true, hint: 'At least 8 characters.' }),
     field({ id: 'confirm_password', label: 'Repeat new password', type: 'password', autocomplete: 'new-password', required: true }),
-    h('div', { class: 'row' },
+    msg,
+    h('div', { class: 'actions' },
       h('button', { type: 'submit', class: 'primary', text: 'Change password' }),
       forced ? h('button', { type: 'button', onclick: logout, text: 'Log out' }) : h('a', { class: 'btn', href: '#/', text: 'Cancel' })));
   form.addEventListener('submit', async (e) => {
@@ -240,42 +330,82 @@ function viewPassword() {
       btn.disabled = false;
     }
   });
-  appEl.append(h('h1', { text: 'Change password' }), form, msg);
-}
-
-function entryLine(a) {
-  const place = [a.city, a.pin].filter(Boolean).join(' ');
-  return [a.phone, place, a.group_name].filter(Boolean).join(' - ');
+  appEl.append(h('div', { class: 'narrow-page' }, h('h1', { text: 'Change password' }), form));
 }
 
 async function viewList() {
-  const status = h('p', { class: 'muted', role: 'status' });
+  const status = h('p', { class: 'count', role: 'status' });
   const listEl = h('ul', { class: 'list' });
-  const tickInfo = h('span', { class: 'muted' });
+  const emptyEl = h('div', { class: 'empty', hidden: true });
   const groupSel = h('select', { id: 'group', name: 'group' }, h('option', { value: '', text: 'All groups' }));
   const qInput = h('input', { id: 'q', name: 'q', type: 'search', value: listState.q, placeholder: 'Name, city, PIN or phone', autocomplete: 'off', enterkeyhint: 'search' });
+  const selCount = h('span', { class: 'sel-count', 'aria-live': 'polite' });
+  const selBar = h('div', { class: 'selbar', role: 'region', 'aria-label': 'Selected addresses', hidden: true },
+    h('div', { class: 'selbar-inner' },
+      selCount,
+      h('button', { type: 'button', class: 'quiet', text: 'Clear', onclick: () => { selected.clear(); draw(); } }),
+      h('a', { class: 'btn print', href: '#/labels' }, icon('printer'), h('span', { text: 'Print labels' }))));
+  const selectAll = h('button', { type: 'button', class: 'quiet', text: 'Select all shown', onclick: () => { current.forEach((a) => selected.add(a.id)); draw(); } });
   let groupsLoaded = false;
   let seq = 0;
   let current = [];
 
   const updateTicks = () => {
-    tickInfo.textContent = `${selected.size} ticked`;
+    selCount.textContent = `${selected.size} selected`;
+    selBar.hidden = selected.size === 0;
+    appEl.classList.toggle('has-selection', selected.size > 0);
   };
+
+  const row = (a) => {
+    const name = fullName(a);
+    const on = selected.has(a.id);
+    const cb = h('input', { type: 'checkbox', checked: on ? true : undefined, 'aria-label': `Select ${name}` });
+    const li = h('li', { class: on ? 'entry-card is-selected' : 'entry-card' });
+    cb.addEventListener('change', () => {
+      if (cb.checked) selected.add(a.id); else selected.delete(a.id);
+      li.classList.toggle('is-selected', cb.checked);
+      updateTicks();
+    });
+    const street = [a.address_line1, a.address_line2].filter(Boolean).join(', ');
+    const place = [a.city, a.pin].filter(Boolean).join(' ');
+    li.append(
+      h('label', { class: 'tick' }, cb),
+      h('div', { class: 'entry-body' },
+        h('a', { class: 'entry', href: `#/edit/${a.id}` }, h('b', { text: name })),
+        street ? h('span', { class: 'entry-line', text: street }) : null,
+        h('span', { class: 'entry-line', text: place }),
+        h('div', { class: 'entry-meta' },
+          a.phone ? h('a', { class: 'tel', href: `tel:${a.phone}`, 'aria-label': `Call ${name}, ${a.phone}` }, icon('phone'), h('span', { text: a.phone })) : null,
+          a.group_name ? h('span', { class: 'tag', text: a.group_name }) : null,
+          h('span', { class: 'added', text: `Added by ${a.created_by_name || 'unknown'}` }))),
+      icon('right', 'icon chev'));
+    return li;
+  };
+
+  const filtering = () => !!(listState.q.trim() || listState.group);
 
   const draw = () => {
     clear(listEl);
-    for (const a of current) {
-      const name = [a.first_name, a.surname].filter(Boolean).join(' ');
-      const cb = h('input', { type: 'checkbox', checked: selected.has(a.id) ? true : undefined, 'aria-label': `Tick ${name}` });
-      cb.addEventListener('change', () => { if (cb.checked) selected.add(a.id); else selected.delete(a.id); updateTicks(); });
-      listEl.append(h('li', null,
-        h('span', { class: 'tick' }, cb),
-        h('a', { class: 'entry', href: `#/edit/${a.id}` },
-          h('b', { text: name }),
-          h('span', { text: entryLine(a) }),
-          h('small', { text: `Added by ${a.created_by_name || 'unknown'}` }))));
+    for (const a of current) listEl.append(row(a));
+    clear(emptyEl);
+    emptyEl.hidden = current.length > 0;
+    selectAll.hidden = current.length === 0;
+    if (current.length) {
+      status.textContent = filtering() ? `${plural(current.length, 'address', 'addresses')} found` : plural(current.length, 'address', 'addresses');
+    } else if (filtering()) {
+      status.textContent = 'No addresses match your search.';
+      emptyEl.append(
+        h('p', { text: 'Check the spelling, or try part of a name, a city, a PIN or a phone number.' }),
+        h('button', { type: 'button', text: 'Clear search', onclick: () => {
+          listState.q = ''; listState.group = ''; qInput.value = ''; groupSel.value = ''; load(); qInput.focus();
+        } }));
+    } else {
+      status.textContent = 'No addresses yet.';
+      emptyEl.append(icon('envelope', 'icon empty-icon'),
+        h('p', { text: 'Add the first one and everyone in the family will see it.' }),
+        h('a', { class: 'btn primary', href: '#/new', text: 'Add the first address' }));
     }
-    status.textContent = current.length ? `${current.length} address${current.length === 1 ? '' : 'es'}` : 'No addresses found.';
+    updateTicks();
   };
 
   const load = async () => {
@@ -295,7 +425,6 @@ async function viewList() {
         groupsLoaded = true;
       }
       draw();
-      updateTicks();
     } catch (err) {
       if (my === seq) status.textContent = err.message;
     }
@@ -310,16 +439,15 @@ async function viewList() {
   groupSel.addEventListener('change', () => { listState.group = groupSel.value; load(); });
 
   appEl.append(
-    h('h1', { text: 'Addresses' }),
-    h('div', { class: 'row' }, h('a', { class: 'btn primary', href: '#/new', text: 'Add address' })),
-    h('label', { for: 'q', text: 'Search' }), qInput,
-    h('label', { for: 'group', text: 'Group' }), groupSel,
-    h('div', { class: 'row' },
-      h('button', { type: 'button', text: 'Tick all shown', onclick: () => { current.forEach((a) => selected.add(a.id)); draw(); updateTicks(); } }),
-      h('button', { type: 'button', text: 'Clear ticks', onclick: () => { selected.clear(); draw(); updateTicks(); } }),
-      tickInfo,
-      h('a', { class: 'btn', href: '#/labels', text: 'Print labels' })),
-    status, listEl);
+    h('div', { class: 'page-head' },
+      h('h1', { text: 'Addresses' }),
+      h('a', { class: 'btn primary', href: '#/new' }, icon('plus'), h('span', { text: 'Add address' }))),
+    h('div', { class: 'filters', role: 'search' },
+      h('div', { class: 'field' }, h('label', { for: 'q', text: 'Search' }), qInput),
+      h('div', { class: 'field' }, h('label', { for: 'group', text: 'Group' }), groupSel)),
+    h('div', { class: 'list-head' }, status, selectAll),
+    listEl, emptyEl, selBar);
+  updateTicks();
   await load();
 }
 
@@ -336,26 +464,35 @@ async function viewForm(id) {
     return;
   }
   const v = existing || {};
-  const msg = h('div');
+  const msg = h('div', { class: 'msg' });
   const dupBox = h('div');
   const dl = h('datalist', { id: 'group-options' }, groups.map((g) => h('option', { value: g })));
   const val = (f) => (v[f] == null ? '' : String(v[f]));
+  const pair = (...fields) => h('div', { class: 'pair' }, ...fields);
+  const group = (legend, ...kids) => h('fieldset', null, h('legend', { text: legend }), ...kids);
 
-  const form = h('form', { novalidate: true },
-    field({ id: 'first_name', label: 'First name', value: val('first_name'), autocomplete: 'given-name', required: true, maxlength: 100 }),
-    field({ id: 'surname', label: 'Surname', value: val('surname'), autocomplete: 'family-name', maxlength: 100 }),
-    field({ id: 'address_line1', label: 'Address line 1', value: val('address_line1'), autocomplete: 'address-line1', required: true, maxlength: 200 }),
-    field({ id: 'address_line2', label: 'Address line 2', value: val('address_line2'), autocomplete: 'address-line2', maxlength: 200 }),
-    field({ id: 'landmark', label: 'Landmark', value: val('landmark'), autocomplete: 'off', maxlength: 200 }),
-    field({ id: 'city', label: 'City', value: val('city'), autocomplete: 'address-level2', required: true, maxlength: 100 }),
-    field({ id: 'state', label: 'State', value: val('state'), autocomplete: 'address-level1', required: true, maxlength: 100 }),
-    field({ id: 'pin', label: 'PIN code', value: val('pin'), autocomplete: 'postal-code', inputmode: 'numeric', required: true, maxlength: 6 }),
-    field({ id: 'phone', label: 'Phone', type: 'tel', value: val('phone'), autocomplete: 'tel', inputmode: 'tel', required: true, hint: '10 digits; +91 or a leading 0 is fine.' }),
-    field({ id: 'email', label: 'Email', type: 'email', value: val('email'), autocomplete: 'email', inputmode: 'email' }),
-    field({ id: 'group_name', label: 'Group', value: val('group_name'), autocomplete: 'off', list: 'group-options', maxlength: 50, hint: 'For example Family or Friends.' }),
-    field({ id: 'notes', label: 'Notes', value: val('notes'), textarea: true, maxlength: 1000 }),
+  const form = h('form', { novalidate: true, class: 'panel' },
+    h('p', { class: 'hint form-hint', text: 'Fields marked * are required.' }),
+    group('Name',
+      pair(
+        field({ id: 'first_name', label: 'First name', value: val('first_name'), autocomplete: 'given-name', required: true, maxlength: 100 }),
+        field({ id: 'surname', label: 'Surname', value: val('surname'), autocomplete: 'family-name', maxlength: 100 }))),
+    group('Postal address',
+      field({ id: 'address_line1', label: 'Address line 1', value: val('address_line1'), autocomplete: 'address-line1', required: true, maxlength: 200 }),
+      field({ id: 'address_line2', label: 'Address line 2', value: val('address_line2'), autocomplete: 'address-line2', maxlength: 200 }),
+      field({ id: 'landmark', label: 'Landmark', value: val('landmark'), autocomplete: 'off', maxlength: 200 }),
+      pair(
+        field({ id: 'city', label: 'City', value: val('city'), autocomplete: 'address-level2', required: true, maxlength: 100 }),
+        field({ id: 'state', label: 'State', value: val('state'), autocomplete: 'address-level1', required: true, maxlength: 100 })),
+      field({ id: 'pin', label: 'PIN code', value: val('pin'), autocomplete: 'postal-code', inputmode: 'numeric', required: true, maxlength: 6, cls: 'short' })),
+    group('Contact',
+      field({ id: 'phone', label: 'Phone', type: 'tel', value: val('phone'), autocomplete: 'tel', inputmode: 'tel', required: true, hint: '10 digits; +91 or a leading 0 is fine.' }),
+      field({ id: 'email', label: 'Email', type: 'email', value: val('email'), autocomplete: 'email', inputmode: 'email' })),
+    group('Group and notes',
+      field({ id: 'group_name', label: 'Group', value: val('group_name'), autocomplete: 'off', list: 'group-options', maxlength: 50, hint: 'For example Family or Friends.' }),
+      field({ id: 'notes', label: 'Notes', value: val('notes'), textarea: true, maxlength: 1000 })),
     dl, dupBox, msg,
-    h('div', { class: 'row' },
+    h('div', { class: 'actions' },
       h('button', { type: 'submit', class: 'primary', id: 'save-btn', text: existing ? 'Save changes' : 'Save address' }),
       h('a', { class: 'btn', href: '#/', text: 'Cancel' })));
 
@@ -397,33 +534,32 @@ async function viewForm(id) {
 
   const showDuplicate = (ex) => {
     clear(dupBox);
-    const name = [ex.first_name, ex.surname].filter(Boolean).join(' ');
+    const name = fullName(ex);
     dupBox.append(h('div', { class: 'warn', role: 'alert' },
-      h('p', null, h('b', { text: 'This phone number is already in the address book.' })),
-      h('p', { text: `${name || 'Existing entry'}${ex.city ? `, ${ex.city}` : ''}${ex.phone ? ` (${ex.phone})` : ''}` }),
-      h('div', { class: 'row' },
-        ex.id ? h('a', { class: 'btn', href: `#/edit/${ex.id}`, text: 'View existing entry' }) : null,
-        h('button', { type: 'button', class: 'primary', onclick: () => submit(true), text: 'Save anyway' }),
-        h('button', { type: 'button', onclick: () => clear(dupBox), text: 'Go back and edit' }))));
+      h('p', { class: 'warn-title' }, icon('alert'), h('b', { text: 'This phone number is already in the address book.' })),
+      h('p', { class: 'warn-entry', text: `${name || 'Existing entry'}${ex.city ? `, ${ex.city}` : ''}${ex.phone ? ` (${ex.phone})` : ''}` }),
+      h('p', { text: 'If this is a different person who shares the number, you can save anyway.' }),
+      h('div', { class: 'actions' },
+        h('button', { type: 'button', class: 'warn-btn', onclick: () => submit(true), text: 'Save anyway' }),
+        h('button', { type: 'button', onclick: () => clear(dupBox), text: 'Go back and edit' }),
+        ex.id ? h('a', { class: 'btn quiet', href: `#/edit/${ex.id}`, text: 'View existing entry' }) : null)));
     dupBox.scrollIntoView({ block: 'center' });
   };
 
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(false); });
 
-  appEl.append(h('h1', { text: existing ? 'Edit address' : 'Add address' }));
-  if (existing) {
-    appEl.append(h('p', { class: 'muted', text: `Added by ${existing.created_by_name || 'unknown'}` }));
-  }
-  appEl.append(form);
+  const head = h('div', { class: 'form-head' }, h('h1', { text: existing ? 'Edit address' : 'Add address' }));
+  if (existing) head.append(h('p', { class: 'added', text: `Added by ${existing.created_by_name || 'unknown'}` }));
+  appEl.append(head, form);
   if (existing && me.role === 'owner') appEl.append(deleteBlock(existing));
 }
 
 function deleteBlock(a) {
-  const box = h('div', { class: 'row' });
+  const box = h('div', { class: 'actions' });
   const ask = () => {
     clear(box);
     box.append(
-      h('p', { class: 'grow', role: 'alert', text: 'Delete this address? It will be removed from the list.' }),
+      h('p', { class: 'confirm-text', role: 'alert', text: 'Delete this address? It will be removed from the list.' }),
       h('button', { type: 'button', class: 'danger', text: 'Yes, delete', onclick: async (e) => {
         e.currentTarget.disabled = true;
         try {
@@ -433,14 +569,18 @@ function deleteBlock(a) {
         } catch (err) {
           clear(box);
           box.append(errorBox(err.message));
-          box.append(h('button', { type: 'button', text: 'Delete...', onclick: ask }));
+          box.append(h('button', { type: 'button', class: 'danger-outline', text: 'Delete...', onclick: ask }));
         }
       } }),
       h('button', { type: 'button', text: 'Cancel', onclick: reset }));
+    box.querySelector('button.danger').focus();
   };
-  const reset = () => { clear(box); box.append(h('button', { type: 'button', class: 'danger', text: 'Delete this address...', onclick: ask })); };
+  const reset = () => { clear(box); box.append(h('button', { type: 'button', class: 'danger-outline', text: 'Delete this address...', onclick: ask })); };
   reset();
-  return h('section', null, h('h2', { text: 'Owner actions' }), box);
+  return h('section', { class: 'danger-zone', 'aria-labelledby': 'owner-actions-h' },
+    h('h2', { id: 'owner-actions-h', text: 'Owner actions' }),
+    h('p', { class: 'hint', text: 'Only you can delete. Deleted addresses disappear for everyone.' }),
+    box);
 }
 
 async function viewLabels() {
@@ -462,32 +602,79 @@ async function viewLabels() {
   const filterDesc = params.toString()
     ? `Current search/filter (${filtered.length})` : `Everything in the current list (${filtered.length})`;
 
-  const msg = h('div');
-  const startInput = h('input', { id: 'start_at', type: 'number', inputmode: 'numeric', min: 1, max: PER_SHEET, value: 1 });
+  const msg = h('div', { class: 'msg' });
+  const startInput = h('input', { id: 'start_at', type: 'number', inputmode: 'numeric', min: 1, max: PER_SHEET, value: 1, 'aria-describedby': 'start-hint' });
   const phoneBox = h('input', { type: 'checkbox', id: 'include_phone' });
-  const modeFilter = h('input', { type: 'radio', name: 'mode', id: 'mode-filter', value: 'filter', checked: true });
-  const modeTicked = h('input', { type: 'radio', name: 'mode', id: 'mode-ticked', value: 'ticked' });
+  const preferTicked = tickedList.length > 0;
+  const modeFilter = h('input', { type: 'radio', name: 'mode', id: 'mode-filter', value: 'filter', checked: preferTicked ? undefined : true });
+  const modeTicked = h('input', { type: 'radio', name: 'mode', id: 'mode-ticked', value: 'ticked', checked: preferTicked ? true : undefined });
   if (!tickedList.length && selected.size === 0) modeTicked.setAttribute('aria-describedby', 'ticked-hint');
   const btn = h('button', { type: 'submit', class: 'primary', text: 'Download PDF' });
 
-  const form = h('form', { novalidate: true },
-    h('fieldset', null,
-      h('legend', { text: 'Which addresses' }),
-      h('label', { class: 'check', for: 'mode-filter' }, modeFilter, h('span', { text: filterDesc })),
-      h('label', { class: 'check', for: 'mode-ticked' }, modeTicked, h('span', { text: `Only ticked entries (${tickedList.length})` })),
-      h('p', { class: 'muted', id: 'ticked-hint', text: 'Tick entries on the Addresses page. To change the search or group, go back to the list.' })),
-    h('label', { for: 'start_at', text: `Start at label (1 to ${PER_SHEET})` }),
-    h('div', { class: 'muted', text: 'Use this to reuse a partly used sheet. Applies to the first sheet only.' }),
-    startInput,
-    h('label', { class: 'check', for: 'include_phone' }, phoneBox, h('span', { text: 'Include phone number' })),
-    h('div', { class: 'row' }, btn, h('a', { class: 'btn', href: '#/', text: 'Back to list' })),
-    msg);
+  // On-screen preview of sheet 1 (pure DOM; the PDF is built separately by buildPdf).
+  const slots = [];
+  const sheet = h('div', { class: 'sheet', 'aria-hidden': 'true' });
+  for (let i = 1; i <= PER_SHEET; i++) {
+    const slot = h('div', { class: 'slot', 'data-slot': i }, h('span', { class: 'slot-n', text: String(i) }), h('span', { class: 'slot-name' }));
+    slot.addEventListener('click', () => { startInput.value = String(i); updatePreview(); });
+    slots.push(slot);
+    sheet.append(slot);
+  }
+  const sheetNote = h('p', { class: 'sheet-note', id: 'sheet-note', 'aria-live': 'polite' });
+
+  const updatePreview = () => {
+    const list = modeTicked.checked ? tickedList : filtered;
+    const raw = startInput.value.trim();
+    const start = Number(raw);
+    const valid = /^\d+$/.test(raw) && start >= 1 && start <= PER_SHEET;
+    const plan = valid ? planLabels(list.length, start) : [];
+    const onSheet1 = new Map(plan.map((p, i) => [p, i]).filter(([p]) => p.sheet === 0).map(([p, i]) => [p.slot, list[i]]));
+    slots.forEach((el, idx) => {
+      const a = onSheet1.get(idx);
+      el.classList.toggle('is-used', valid && idx + 1 < start);
+      el.classList.toggle('is-filled', !!a);
+      el.lastChild.textContent = a ? fullName(a) : '';
+    });
+    if (!valid) { sheetNote.textContent = `Enter a label number from 1 to ${PER_SHEET} to see where the labels go.`; return; }
+    if (!list.length) { sheetNote.textContent = modeTicked.checked ? 'No addresses are selected yet.' : 'There are no addresses to print.'; return; }
+    const first = onSheet1.size;
+    const sheets = plan[plan.length - 1].sheet + 1;
+    const span = first === 1 ? `label ${start}` : `labels ${start} to ${start + first - 1}`;
+    let note = `Sheet 1: ${span} will be printed.`;
+    if (start > 1) note += ` Labels 1 to ${start - 1} stay blank.`;
+    if (sheets > 1) note += ` ${plural(list.length - first, 'more label goes', 'more labels go')} on ${sheets === 2 ? 'sheet 2' : `sheets 2 to ${sheets}`}.`;
+    sheetNote.textContent = note;
+  };
+  startInput.addEventListener('input', updatePreview);
+  modeFilter.addEventListener('change', updatePreview);
+  modeTicked.addEventListener('change', updatePreview);
+
+  const form = h('form', { novalidate: true, class: 'panel labels-form' },
+    h('div', { class: 'labels-opts' },
+      h('fieldset', null,
+        h('legend', { text: 'Which addresses' }),
+        h('label', { class: 'check choice', for: 'mode-filter' }, modeFilter, h('span', { text: filterDesc })),
+        h('label', { class: 'check choice', for: 'mode-ticked' }, modeTicked, h('span', { text: `Only selected addresses (${tickedList.length})` })),
+        h('p', { class: 'hint', id: 'ticked-hint', text: 'Select addresses on the Addresses page. To change the search or group, go back to the list.' })),
+      h('fieldset', null,
+        h('legend', { text: 'Sheet' }),
+        h('div', { class: 'field short' },
+          h('label', { for: 'start_at', text: `Start at label (1 to ${PER_SHEET})` }),
+          h('div', { class: 'hint', id: 'start-hint', text: 'To reuse a partly used sheet, enter the first empty label, or tap it on the picture. Applies to the first sheet only.' }),
+          startInput),
+        h('label', { class: 'check', for: 'include_phone' }, phoneBox, h('span', { text: 'Include phone number' })))),
+    h('figure', { class: 'sheet-figure' },
+      h('div', { class: 'sheet-wrap' }, sheet),
+      h('figcaption', null, sheetNote)),
+    h('div', { class: 'labels-act' },
+      msg,
+      h('div', { class: 'actions' }, btn, h('a', { class: 'btn', href: '#/', text: 'Back to list' }))));
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     clear(msg);
     const list = modeTicked.checked ? tickedList : filtered;
-    if (!list.length) { msg.append(errorBox(modeTicked.checked ? 'No entries are ticked.' : 'There are no addresses to print.')); return; }
+    if (!list.length) { msg.append(errorBox(modeTicked.checked ? 'No addresses are selected.' : 'There are no addresses to print.')); return; }
     const startRaw = startInput.value.trim();
     const start = Number(startRaw);
     if (!/^\d+$/.test(startRaw) || start < 1 || start > PER_SHEET) {
@@ -505,8 +692,9 @@ async function viewLabels() {
   });
 
   appEl.append(h('h1', { text: 'Print labels' }),
-    h('p', { class: 'muted', text: `A4 sheets of ${PER_SHEET} labels (Avery L7160, ${LABEL_W} x ${LABEL_H} mm).` }),
+    h('p', { class: 'lede', text: `A4 sticker sheets of ${PER_SHEET} labels (Avery L7160, ${LABEL_W} x ${LABEL_H} mm).` }),
     form);
+  updatePreview();
 }
 
 const PAD = 3; // mm inner padding
@@ -539,19 +727,19 @@ function buildPdf(JsPDF, list, startAt, includePhone) {
 async function viewUsers() {
   const holder = h('div');
   const secretHolder = h('div');
-  const msg = h('div');
+  const msg = h('div', { class: 'msg' });
   let users = [];
 
   const showSecret = (title, user, password) => {
     clear(secretHolder);
     const input = h('input', { type: 'text', readonly: true, value: password, id: 'secret-pw', 'aria-label': 'Generated password', autocomplete: 'off', spellcheck: 'false' });
-    const status = h('span', { class: 'muted', role: 'status' });
+    const status = h('span', { class: 'copy-status', role: 'status' });
     secretHolder.append(h('div', { class: 'secret', role: 'alert' },
       h('h2', { text: title }),
-      h('p', { text: `Password for ${user.name} (${user.email}):` }),
+      h('p', null, 'Password for ', h('strong', { text: user.name }), ` (${user.email}):`),
       input,
-      h('p', null, h('b', { text: 'This will not be shown again.' }), ' Copy it now and pass it on. They will be asked to choose their own password at first login.'),
-      h('div', { class: 'row' },
+      h('p', { class: 'once' }, h('b', { text: 'This will not be shown again.' }), ' Copy it now and pass it on. They will be asked to choose their own password at first login.'),
+      h('div', { class: 'actions' },
         h('button', { type: 'button', class: 'primary', text: 'Copy password', onclick: async () => {
           status.textContent = (await copyText(password, input)) ? 'Copied.' : 'Copy failed. Select the password and copy it by hand.';
         } }),
@@ -572,49 +760,55 @@ async function viewUsers() {
   };
 
   const userRow = (u) => {
-    const actions = h('div', { class: 'row' });
-    const resetBtn = () => h('button', { type: 'button', text: 'Reset password...', onclick: () => {
+    const actions = h('div', { class: 'actions' });
+    const resetBtn = () => h('button', { type: 'button', class: 'small', text: 'Reset password...', onclick: () => {
       clear(actions);
       actions.append(
-        h('span', { text: `Reset password for ${u.name}? Their current password stops working.` }),
-        h('button', { type: 'button', class: 'danger', text: 'Yes, reset', onclick: () => act(u, 'reset-password') }),
-        h('button', { type: 'button', text: 'Cancel', onclick: () => renderActions() }));
+        h('span', { class: 'confirm-text', text: `Reset password for ${u.name}? Their current password stops working.` }),
+        h('button', { type: 'button', class: 'danger small', text: 'Yes, reset', onclick: () => act(u, 'reset-password') }),
+        h('button', { type: 'button', class: 'small', text: 'Cancel', onclick: () => renderActions() }));
     } });
     const renderActions = () => {
       clear(actions);
       if (me.role !== 'owner') return;
       if (u.role !== 'owner') {
-        actions.append(h('button', { type: 'button', text: u.disabled ? 'Enable' : 'Disable', onclick: () => act(u, u.disabled ? 'enable' : 'disable') }));
+        actions.append(u.disabled
+          ? h('button', { type: 'button', class: 'small', text: 'Enable', onclick: () => act(u, 'enable') })
+          : h('button', { type: 'button', class: 'danger-outline small', text: 'Disable', onclick: () => act(u, 'disable') }));
       }
       actions.append(resetBtn());
     };
     renderActions();
-    return h('li', { class: 'user' },
-      h('b', { text: u.name }),
-      u.role === 'owner' ? h('span', { class: 'tag', text: 'owner' }) : null,
-      u.disabled ? h('span', { class: 'tag off', text: 'disabled' }) : null,
-      u.must_change_password ? h('span', { class: 'tag', text: 'password change pending' }) : null,
-      h('div', { class: 'muted', text: u.email }),
-      actions);
+    return h('li', { class: u.disabled ? 'user is-disabled' : 'user' },
+      h('div', { class: 'user-head' },
+        h('b', { class: 'user-name', text: u.name }),
+        u.role === 'owner' ? h('span', { class: 'tag', text: 'owner' }) : null,
+        u.disabled ? h('span', { class: 'tag off', text: 'disabled' }) : null,
+        u.must_change_password ? h('span', { class: 'tag pending', text: 'password change pending' }) : null),
+      h('div', { class: 'user-email', text: u.email }),
+      u.disabled ? h('p', { class: 'hint', text: 'Cannot log in until enabled again.' }) : null,
+      me.role === 'owner' ? h('div', { class: 'owner-actions' }, h('span', { class: 'owner-label', text: 'Owner actions' }), actions) : null);
   };
 
   const load = async () => {
     try {
       users = (await api('GET', '/api/users')).users || [];
       clear(holder);
-      holder.append(h('ul', { class: 'list' }, users.map(userRow)));
+      holder.append(h('ul', { class: 'list users' }, users.map(userRow)));
     } catch (err) {
       clear(holder);
       holder.append(errorBox(err.message));
     }
   };
 
-  const addMsg = h('div');
-  const form = h('form', { novalidate: true },
+  const addMsg = h('div', { class: 'msg' });
+  const form = h('form', { novalidate: true, class: 'panel' },
+    h('h2', { text: 'Add a user' }),
+    h('p', { class: 'hint', text: 'Add a family member who should be able to log in. A password is created for them and shown once, for you to pass on. Users can be disabled later, but not deleted.' }),
     field({ id: 'name', label: 'Name', autocomplete: 'off', required: true, maxlength: 100 }),
     field({ id: 'new_email', label: 'Email', type: 'email', autocomplete: 'off', inputmode: 'email', required: true }),
-    h('div', { class: 'row' }, h('button', { type: 'submit', class: 'primary', text: 'Add user' })),
-    addMsg);
+    addMsg,
+    h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'primary', text: 'Add user' })));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     clear(addMsg); clear(secretHolder);
@@ -643,10 +837,9 @@ async function viewUsers() {
     btn.disabled = false;
   });
 
-  appEl.append(h('h1', { text: 'Users' }), secretHolder, msg, holder,
-    h('h2', { text: 'Add a co-user' }),
-    h('p', { class: 'muted', text: 'A password is generated and shown once. Users cannot be deleted.' }),
-    form);
+  appEl.append(h('h1', { text: 'Users' }),
+    h('p', { class: 'lede', text: 'Everyone here can log in, see every address and add new ones.' }),
+    secretHolder, msg, holder, form);
   await load();
 }
 
@@ -666,6 +859,7 @@ async function route() {
 
   if (!me) {
     renderTop();
+    mainEl.className = 'view-login';
     if (hash !== '#/login') { history.replaceState(null, '', '#/login'); }
     viewLogin();
     return;
@@ -673,6 +867,7 @@ async function route() {
   if (me.must_change_password && hash !== '#/password') {
     history.replaceState(null, '', '#/password');
     renderTop();
+    mainEl.className = 'view-password';
     viewPassword();
     return;
   }
@@ -680,6 +875,7 @@ async function route() {
 
   const parts = hash.replace(/^#\/?/, '').split('/');
   const name = parts[0];
+  mainEl.className = `view-${/^(new|edit|labels|users|password)$/.test(name) ? name : 'list'}`;
   try {
     if (name === 'login') { go('#/'); return; }
     if (name === 'password') viewPassword();

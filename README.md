@@ -24,7 +24,7 @@ step and nothing to install on a server.
   can still choose "Save anyway".
 - Search by name, surname, city, PIN or phone; filter by group.
 - PDF sticker labels (A4, 3 x 7 labels of 63.5 x 38.1 mm, Avery L7160 style): print
-  everything in the current search/filter or only ticked entries, optionally start at
+  everything in the current search/filter or only selected entries, optionally start at
   label N to reuse a partly used sheet, optionally include the phone number.
 - CSV export of all addresses, for any signed-in user (also your backup, see below).
 - Sign-in protection: after 5 failed attempts for an email within 15 minutes, further
@@ -192,8 +192,8 @@ commit to the repository.
 ### 8. First login
 
 Open your `https://<project-name>.pages.dev` address and log in with `OWNER_EMAIL` and
-`OWNER_PASSWORD`. The owner account is created at that moment. Use the **Password** link
-in the menu to change the owner password to one only you know.
+`OWNER_PASSWORD`. The owner account is created at that moment. Use **More > Change password**
+to change the owner password to one only you know.
 
 After the first successful owner login you can delete the `OWNER_PASSWORD` secret (and
 `OWNER_EMAIL`). They are only used to create the owner account, and that happens only
@@ -241,7 +241,7 @@ before changing anything.
 
 ### Adding people and passing on the password
 
-Open **Users**, enter the person's name and email and press **Add user**. A box shows the
+Open **More > Users**, enter the person's name and email and press **Add user**. A box shows the
 generated password **once**: copy it and send it to the person yourself (for example in a
 private message). The app does not send email. When they first log in they are asked to
 choose their own password before they can see anything else. Any signed-in user can add
@@ -249,7 +249,7 @@ co-users, not only the owner.
 
 ### Disabling a user (owner only)
 
-Open **Users** and press **Disable** next to the person. They are locked out at once, even
+Open **More > Users** and press **Disable** next to the person. They are locked out at once, even
 if they are signed in on a phone. **Enable** restores access with their existing password, but they have to log in again:
 sessions that existed before the disable do not come back.
 **Reset password...** gives a new one-time password and forces a change at next login.
@@ -257,11 +257,13 @@ Users cannot be deleted, and the owner cannot be disabled.
 
 ### Printing labels
 
-1. On **Addresses**, search or filter as needed, and tick entries if you want to print
-   only some of them.
-2. Open **Labels**. Choose "current search/filter" or "only ticked entries", set "Start at
-   label" if the sheet is partly used (for example 4 to skip the first three labels), and
-   tick "Include phone number" if wanted.
+1. On **Addresses**, search or filter as needed, and tick the boxes of entries if you want
+   to print only some of them. A bar at the bottom shows how many are selected; its
+   **Print labels** button opens the Labels page.
+2. Open **Labels**. Choose "current search/filter" or "only selected addresses", set "Start
+   at label" if the sheet is partly used (for example 4 to skip the first three labels; you
+   can also tap the first empty label on the sheet picture, which shows where each label
+   will go), and tick "Include phone number" if wanted.
 3. Press **Download PDF**.
 4. Open the PDF and print on **A4** label sheets of 21 labels (3 columns x 7 rows,
    63.5 x 38.1 mm, Avery L7160 style). In the print dialog set scale to **100% / "Actual
@@ -273,7 +275,7 @@ Long lines wrap, and the text shrinks if an entry would not otherwise fit on a l
 
 ### Backup
 
-Use **Export CSV** in the menu to download every (non-deleted) address as `addresses.csv`.
+Use **Export CSV** in the **More** menu to download every (non-deleted) address as `addresses.csv`.
 Do this now and then and keep the file somewhere safe. It opens in any spreadsheet (the file starts with a UTF-8 byte order mark so Excel shows
 non-English letters correctly). Cells
 that begin with `=`, `+`, `-` or `@` get a leading apostrophe so a spreadsheet will not

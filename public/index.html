@@ -2,13 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#183B6B">
 <title>Family Address Book</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<header id="top" hidden></header>
-<main id="app" aria-live="polite"><p class="muted">Loading...</p></main>
+<header id="top" class="topbar" hidden></header>
+<main id="app"><p class="loading">Loading...</p></main>
 <noscript><p class="pad">This app needs JavaScript.</p></noscript>
 <script src="/vendor/jspdf.umd.min.js"></script>
 <script type="module" src="/app.js"></script>
