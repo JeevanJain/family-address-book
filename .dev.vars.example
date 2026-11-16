@@ -1,0 +1,7 @@
+# Copy to .dev.vars (git-ignored) for local development. Placeholders only.
+# For production set these as Cloudflare Pages secrets instead.
+# SESSION_SECRET must be at least 32 characters (the server refuses to run with less).
+# Generate one with: openssl rand -base64 48
+SESSION_SECRET=replace-with-at-least-32-random-characters-0123456789
+OWNER_EMAIL=owner@example.com
+OWNER_PASSWORD=replace-with-a-strong-password

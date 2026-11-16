@@ -1,0 +1,9 @@
+name = "family-address-book"
+compatibility_date = "2025-11-01"
+pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "family-address-book"
+database_id = "ac3b788a-94c2-4ac6-bd65-ebd7a0246da6"
+migrations_dir = "migrations"
