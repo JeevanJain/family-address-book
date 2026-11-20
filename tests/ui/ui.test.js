@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
 import { startServer } from '../helpers/server.js';
 import { Client } from '../helpers/client.js';
@@ -148,7 +149,7 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     await openMore();
     assert.match(await text(), /Signed in as Owner \(owner\)/);
     const more = await page.$$eval('#more-menu a, #more-menu button', (els) => els.map((e) => e.textContent.trim()));
-    assert.deepEqual(more, ['Users', 'Change password', 'Export CSV', 'Log out']);
+    assert.deepEqual(more, ['Users', 'Change password', 'Export CSV', 'Export to Excel (.xlsx)', 'Log out']);
     assert.equal(await page.$eval('#more-menu a[download]', (a) => a.getAttribute('href')), '/api/export.csv');
     await page.keyboard.press('Escape');
     await until(() => document.getElementById('more-menu').hidden);
@@ -188,7 +189,7 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
     // ArrowDown opens and focuses the first item; Tab moves through the items; tabbing out closes
     await page.keyboard.press('ArrowDown');
     assert.deepEqual(await st(), { expanded: 'true', hidden: false, focus: 'Users' });
-    for (const next of ['Change password', 'Export CSV', 'Log out']) {
+    for (const next of ['Change password', 'Export CSV', 'Export to Excel (.xlsx)', 'Log out']) {
       await page.keyboard.press('Tab');
       assert.equal((await st()).focus, next);
     }
@@ -543,7 +544,11 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       throw new Error(`no PDF arrived in the download folder; files: ${readdirSync(dlDir)}`);
     }
     const notice = () => page.$eval('.notice[role=status]', (e) => e.textContent);
-    const openLabels = async () => { await clickText('#top a', 'Labels'); await waitH1('Print labels'); };
+    // The screen's default layout is now 12-up; the older tests below were written for L7160, so they pick it explicitly.
+    const openLabels = async (layout = 'l7160') => {
+      await clickText('#top a', 'Labels'); await waitH1('Print labels');
+      if (layout && await page.$eval('#layout', (e) => e.value) !== layout) await page.select('#layout', layout);
+    };
     const backToList = async () => { await clickText('#top a', 'Addresses'); await waitH1('Addresses'); };
     const near = (a, b, tol = 0.01) => Math.abs(a - b) < tol;
     const allTexts = (pdf) => pdf.texts.flat();
@@ -557,6 +562,22 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       await goHash('#/');
       await page.reload();
       await waitH1('Addresses');
+      await until(() => document.querySelector('#group option[value=Bulk]'));
+    });
+
+    it('with nothing remembered the Labels view starts on 12 per sheet, 2 x 6, 99.1 x 42.3 mm (listed first); 21-up stays available', async () => {
+      await clickText('#top a', 'Labels');
+      await waitH1('Print labels');
+      assert.equal(await page.evaluate(() => localStorage.getItem('fab.labelLayout')), null, 'nothing stored yet');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      const opts = await page.$$eval('#layout option', (o) => o.map((x) => [x.value, x.textContent]));
+      assert.deepEqual(opts[0], ['l7177', '12 per sheet, 2 \u00d7 6, 99.1 \u00d7 42.3 mm (L7177)']);
+      assert.deepEqual(opts.map((o) => o[0]), ['l7177', 'l7160', 'l7164', 'w105x48', 'w105x49', 'w100x44', 'custom']);
+      assert.ok(opts.some(([v, t]) => v === 'l7160' && t === '21 per sheet, 3 \u00d7 7, 63.5 \u00d7 38.1 mm (L7160)'));
+      assert.equal(await page.$$eval('.sheet .slot', (s) => s.length), 12);
+      assert.equal(await page.$eval('#start_at', (e) => e.max), '12');
+      assert.equal(await page.$eval('label[for=layout]', (e) => e.textContent), 'Sheet layout');
+      await backToList();
       await until(() => document.querySelector('#group option[value=Bulk]'));
     });
 
@@ -699,6 +720,459 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       await page.click('#mode-ticked');
       await page.click('form button[type=submit]');
       await until(() => document.querySelector('p.error')?.textContent === 'No addresses are selected.');
+    });
+
+    // ---------- label layouts ----------
+    const rectsOf = (pdf) => [...pdf.bytes.matchAll(/stream\r?\n([\s\S]*?)endstream/g)].map((m) => m[1]).filter((x) => x.includes(' Td') || / re\r?\nS/.test(x))
+      .map((st) => [...st.matchAll(/([\d.\-]+) ([\d.\-]+) ([\d.\-]+) ([\d.\-]+) re\r?\nS/g)]
+        .map((m) => ({ x: Number(m[1]) * MM, y: 297 - Number(m[2]) * MM, w: Number(m[3]) * MM, h: -Number(m[4]) * MM })));
+    const clearField = (sel) => page.$eval(sel, (e) => { e.value = ''; e.dispatchEvent(new Event('input', { bubbles: true })); });
+    const mmY = (ypt) => 297 - ypt * MM;
+    const setLayout = async (id) => { if (await page.$eval('#layout', (e) => e.value) !== id) await page.select('#layout', id); };
+    const sheetGeometry = () => page.$eval('.sheet', (sh) => {
+      const sr = sh.getBoundingClientRect();
+      const slots = [...sh.querySelectorAll('.slot')].map((e) => e.getBoundingClientRect());
+      const uniq = (a) => [...new Set(a.map((v) => Math.round(v)))];
+      return { n: slots.length, cols: uniq(slots.map((r) => r.left)).length, rows: uniq(slots.map((r) => r.top)).length, sw: sr.width, sh: sr.height, w: slots[0]?.width, h: slots[0]?.height, dc: sh.dataset.cols, dr: sh.dataset.rows,
+        inside: slots.every((r) => r.left >= sr.left - 1 && r.right <= sr.right + 1 && r.top >= sr.top - 1 && r.bottom <= sr.bottom + 1) };
+    });
+
+    it('12-per-sheet 2 x 6 (99.1 x 42.3): preview redraws, start-at is limited to 12, 13 addresses make a 2-page PDF with text inside the label rectangles', async () => {
+      const { presetById, labelRect: lr } = await import('../../public/labels.js');
+      const L = presetById('l7177');
+      await backToList();
+      await listIs(24);
+      await page.evaluate(() => { for (let i = 1; i <= 13; i++) document.querySelector(`input[aria-label="Select Bulk${String(i).padStart(2, '0')} Label"]`).click(); });
+      await until(() => document.body.innerText.includes('13 selected'));
+      await until(() => document.querySelector('.selbar').getAnimations().every((x) => x.playState === 'finished'));
+      await clickText('.selbar a', 'Print labels');
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#mode-ticked', (e) => e.checked), true);
+      await setLayout('l7160');
+      assert.equal((await sheetGeometry()).n, 21);
+      await page.select('#layout', 'l7177');
+      const g = await sheetGeometry();
+      assert.deepEqual([g.n, g.cols, g.rows, g.dc, g.dr], [12, 2, 6, '2', '6']);
+      assert.ok(Math.abs(g.sh / g.sw - 297 / 210) < 0.01, `sheet is A4-shaped: ${g.sh / g.sw}`);
+      assert.ok(Math.abs(g.w / g.h - 99.1 / 42.3) < 0.05, `slot is 99.1 x 42.3-shaped: ${g.w / g.h}`);
+      assert.equal(g.inside, true, 'all slots drawn inside the sheet');
+      assert.match(await page.$eval('#layout-desc', (e) => e.textContent), /^12 labels per sheet: 2 columns × 6 rows, each 99\.1 × 42\.3 mm\.$/);
+      // start-at is limited to the 12 slots of this layout
+      assert.equal(await page.$eval('#start_at', (e) => e.max), '12');
+      assert.equal(await page.$eval('label[for=start_at]', (e) => e.textContent), 'Start at label (1 to 12)');
+      await fill('#start_at', '13');
+      assert.match(await page.$eval('#sheet-note', (e) => e.textContent), /Enter a label number from 1 to 12/);
+      for (const f of pdfFiles()) rmSync(join(dlDir, f));
+      await page.click('form button[type=submit]');
+      await until(() => document.querySelector('p.error')?.textContent.includes('Start label must be a whole number from 1 to 12.'));
+      await fill('#start_at', '12');
+      const marks = await page.$$eval('.sheet .slot', (s) => s.map((e) => (e.classList.contains('is-filled') ? 'F' : e.classList.contains('is-used') ? 'u' : '.')).join(''));
+      assert.equal(marks, 'uuuuuuuuuuuF');
+      // switching from a layout with more slots clamps a too-large start label
+      await page.select('#layout', 'l7160');
+      await fill('#start_at', '20');
+      await page.select('#layout', 'l7177');
+      assert.equal(await page.$eval('#start_at', (e) => e.value), '12', 'clamped to the last slot of the 12-up sheet');
+      // tapping a slot sets the start position
+      await page.click('.sheet .slot[data-slot="7"]');
+      assert.equal(await page.$eval('#start_at', (e) => e.value), '7');
+      await fill('#start_at', '1');
+
+      const pdf = await generate();
+      assert.equal(await notice(), 'Created address-labels.pdf: 13 labels on 2 sheets.');
+      assert.equal(pdf.pages, 2);
+      const { jsPDF } = await import('jspdf');
+      const meas = new jsPDF({ unit: 'mm', format: 'a4' });
+      const pad = 4;
+      const names = [];
+      for (const [pi, texts] of pdf.texts.entries()) {
+        // font size comes from the layout (11.5 pt for 42.3 mm labels) because this short content fits
+        const perSlot = new Map();
+        for (const t of texts) {
+          const ymm = mmY(t.ypt);
+          const idx = Array.from({ length: 12 }, (_, i) => i).find((i) => { const r = lr(i, L); return t.xmm >= r.x && t.xmm < r.x + r.w && ymm > r.y && ymm < r.y + r.h; });
+          assert.notEqual(idx, undefined, `text "${t.t}" is not inside any label rectangle (page ${pi + 1}, x=${t.xmm}, y=${ymm})`);
+          const r = lr(idx, L);
+          assert.ok(near(t.xmm, r.x + pad), `"${t.t}" starts ${pad} mm inside its label: ${t.xmm} vs ${r.x + pad}`);
+          meas.setFont('helvetica', 'bold'); meas.setFontSize(11.5);
+          assert.ok(t.xmm + meas.getTextWidth(t.t) <= r.x + r.w - pad + 0.01, `"${t.t}" ends inside the right padding`);
+          assert.ok(ymm >= r.y + pad && ymm <= r.y + r.h - pad, `baseline of "${t.t}" is inside the label's text box`);
+          perSlot.set(idx, [...(perSlot.get(idx) || []), t]);
+          if (/^Bulk\d\d Label$/.test(t.t)) names.push([pi, idx, t]);
+        }
+        assert.equal(perSlot.size, pi === 0 ? 12 : 1, `page ${pi + 1} fills ${pi === 0 ? 12 : 1} slots`);
+        for (const lines of perSlot.values()) assert.equal(lines.length, 4, 'name, street, city/state and PIN');
+      }
+      assert.equal(names.length, 13);
+      assert.deepEqual(names.map(([pi, idx]) => [pi, idx]), Array.from({ length: 13 }, (_, i) => [i < 12 ? 0 : 1, i % 12]));
+      const r0 = lr(0, L);
+      assert.ok(near(names[0][2].ypt, await expectedYpt(r0.y + pad, 11.5), 0.001), 'first line sits 4 mm below the label top at 11.5 pt');
+      assert.ok(near(names[1][2].xmm - names[0][2].xmm, 101.6), 'columns 101.6 mm apart');
+      assert.ok(near(names[0][2].ypt - names[2][2].ypt, 42.3 / MM, 0.001), 'rows 42.3 mm apart');
+    });
+
+    it('a very long address still sits inside its 12-up label (text shrinks, nothing leaves the rectangle)', async () => {
+      const { presetById, labelRect: lr } = await import('../../public/labels.js');
+      const L = presetById('l7164');
+      const long = 'Very '.repeat(30).trim();
+      const r = await api.post('/api/addresses', { ...ADDR, first_name: 'Longline', surname: 'Tester', address_line1: long, address_line2: long, landmark: long, phone: '9611111111' });
+      assert.equal(r.status, 201, r.text);
+      await backToList();
+      await until(() => document.querySelector('.selbar').getAnimations().every((x) => x.playState === 'finished'));
+      await clickText('.selbar button', 'Clear');
+      await until(() => document.querySelector('.selbar').hidden);
+      await page.select('#group', '');
+      await fill('#q', ''); await page.type('#q', 'Longline');
+      await listIs(1);
+      await openLabels('l7164');
+      const pdf = await generate();
+      assert.equal(pdf.pages, 1);
+      const r0 = lr(0, L);
+      assert.ok(pdf.texts[0].length >= 4);
+      for (const t of pdf.texts[0]) {
+        const ymm = mmY(t.ypt);
+        assert.ok(t.xmm >= r0.x + 3 - 0.01, `"${t.t}" left`);
+        assert.ok(ymm > r0.y && ymm < r0.y + r0.h, `"${t.t}" baseline inside the label (y=${ymm})`);
+      }
+      const lowest = Math.max(...pdf.texts[0].map((t) => mmY(t.ypt)));
+      assert.ok(lowest < r0.y + r0.h - 3 + 0.01, `last baseline ${lowest} is above the bottom padding`);
+    });
+
+    it('custom layout: prefilled from the selected preset, bad input shows inline messages and blocks the PDF, good input redraws the preview', async () => {
+      await goHash('#/labels');
+      await waitH1('Print labels');
+      await setLayout('l7177');
+      assert.equal(await page.$eval('#custom-sheet', (e) => e.hidden), true);
+      for (const x of pdfFiles()) rmSync(join(dlDir, x));
+      await page.select('#layout', 'custom');
+      assert.equal(await page.$eval('#custom-sheet', (e) => e.hidden), false);
+      const vals = () => page.$$eval('#custom-sheet input', (i) => i.map((e) => e.value));
+      assert.deepEqual(await vals(), ['2', '6', '99.1', '42.3', '21.6', '4.65', '2.5', '0'], 'pre-filled with the 99.1 x 42.3 preset');
+      assert.equal((await sheetGeometry()).n, 12);
+      const labelsFor = await page.$$eval('#custom-sheet label', (l) => l.map((e) => e.textContent.trim()));
+      assert.deepEqual(labelsFor, ['Columns', 'Rows', 'Label width (mm)', 'Label height (mm)', 'Top margin (mm)', 'Left margin (mm)', 'Horizontal gap (mm)', 'Vertical gap (mm)']);
+      for (const f of ['cols', 'rows', 'labelW', 'labelH', 'topMargin', 'sideMargin', 'colGap', 'rowGap']) {
+        assert.equal(await page.$eval(`label[for=custom_${f}]`, (e) => e.control?.id), `custom_${f}`, `label is tied to ${f}`);
+      }
+      await fill('#custom_labelW', '110');
+      await until(() => document.getElementById('custom_labelW-err').textContent.includes('Too wide for A4'));
+      assert.equal(await page.$eval('#custom_labelW', (e) => e.getAttribute('aria-invalid')), 'true');
+      assert.match(await page.$eval('#custom_labelW-err', (e) => e.textContent), /210 mm wide/);
+      assert.equal((await sheetGeometry()).n, 0, 'no preview while invalid');
+      assert.match(await page.$eval('#sheet-note', (e) => e.textContent), /Fix the sheet sizes/);
+      await page.click('form button[type=submit]');
+      await until(() => document.querySelector('p.error')?.textContent.startsWith('Fix the sheet sizes first.'));
+      assert.equal(await page.$eval('#custom_labelW', (e) => e === document.activeElement), true, 'focus moves to the bad field');
+      await fill('#custom_labelW', '0');
+      await until(() => /more than 0/.test(document.getElementById('custom_labelW-err').textContent));
+      await clearField('#custom_labelW');
+      await until(() => /enter a number/.test(document.getElementById('custom_labelW-err').textContent));
+      await fill('#custom_labelW', '99.1');
+      await fill('#custom_cols', '1.5');
+      await until(() => /whole number/.test(document.getElementById('custom_cols-err').textContent));
+      await fill('#custom_cols', '2');
+      await fill('#custom_rowGap', '-1');
+      await until(() => /cannot be negative/.test(document.getElementById('custom_rowGap-err').textContent));
+      await fill('#custom_rowGap', '0');
+      await fill('#custom_labelH', '60');
+      await until(() => document.getElementById('custom_labelH-err').textContent.includes('Too tall for A4'));
+      await new Promise((r) => setTimeout(r, 400));
+      assert.deepEqual(pdfFiles(), [], 'nothing was downloaded');
+      // a valid custom sheet: 2 x 5, 100 x 50 mm
+      await fillForm({ custom_rows: '5', custom_labelW: '100', custom_labelH: '50', custom_topMargin: '10', custom_sideMargin: '5', custom_colGap: '0' });
+      await until(() => [...document.querySelectorAll('#custom-sheet .field-error')].every((e) => e.textContent === ''));
+      const g = await sheetGeometry();
+      assert.deepEqual([g.n, g.cols, g.rows], [10, 2, 5]);
+      assert.equal(await page.$eval('#start_at', (e) => e.max), '10');
+      assert.equal(await page.$eval('label[for=start_at]', (e) => e.textContent), 'Start at label (1 to 10)');
+      assert.match(await page.$eval('#layout-desc', (e) => e.textContent), /^10 labels per sheet: 2 columns × 5 rows, each 100 × 50 mm\.$/);
+      const pdf = await generate();
+      assert.equal(pdf.pages, 1, 'the filter still shows only Longline');
+      assert.ok(near(pdf.texts[0][0].xmm, 5 + 4), `custom sheet: 5 mm margin + 4 mm padding (labels 100 mm wide): ${pdf.texts[0][0].xmm}`);
+    });
+
+    it('the layout choice and the custom values survive a reload; localStorage trouble falls back to the 12-up default', async () => {
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'custom');
+      assert.deepEqual(await page.$$eval('#custom-sheet input', (i) => i.map((e) => e.value)), ['2', '5', '100', '50', '10', '5', '0', '0']);
+      assert.equal((await sheetGeometry()).n, 10);
+      await page.select('#layout', 'l7164');
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7164');
+      assert.equal((await sheetGeometry()).n, 12);
+      assert.equal((await sheetGeometry()).cols, 3);
+      // garbage in storage -> default; custom values that no longer fit -> default
+      await page.evaluate(() => localStorage.setItem('fab.labelLayout', '{not json'));
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      await page.evaluate(() => localStorage.setItem('fab.labelLayout', JSON.stringify({ id: 'custom', custom: { cols: '9', rows: '9', labelW: '90', labelH: '90', topMargin: '0', sideMargin: '0', colGap: '0', rowGap: '0' } })));
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      await page.evaluate(() => localStorage.setItem('fab.labelLayout', JSON.stringify({ id: 'bogus' })));
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      // storage that throws is survived
+      await page.evaluateOnNewDocument(() => {
+        const boom = () => { throw new DOMException('denied', 'SecurityError'); };
+        Storage.prototype.getItem = boom; Storage.prototype.setItem = boom;
+      });
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      await page.select('#layout', 'l7164');
+      assert.equal((await sheetGeometry()).n, 12, 'still works without storage');
+    });
+
+    it('label outlines: off by default; on draws a rectangle for every slot of every sheet (filled or not), no errors', async () => {
+      // new documents now have throwing storage (set above), so use a fresh page for the rest of the labels tests
+      const old = page;
+      page = await browser.newPage();
+      await old.close();
+      await page.setViewport({ width: 390, height: 800 });
+      page.on('console', (m) => { if (/Content[- ]Security[- ]Policy|Refused to/i.test(m.text())) cspViolations.push(m.text()); });
+      page.on('pageerror', (e) => pageErrors.push(String(e)));
+      page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) consoleErrors.push(m.text()); });
+      await page.evaluateOnNewDocument(() => {
+        window.__csp = [];
+        document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(`${e.violatedDirective} ${e.blockedURI}`));
+      });
+      await page.goto(`${srv.baseUrl}/#/labels`);
+      await waitH1('Print labels');
+      await setLayout('l7177');
+      assert.equal(await page.$eval('#outlines', (e) => e.checked), false, 'off by default');
+      assert.equal(await page.$eval('label[for=outlines]', (e) => e.textContent.trim()), 'Draw label outlines (for a test print on plain paper)');
+      let pdf = await generate();
+      assert.equal(rectsOf(pdf).flat().length, 0, 'no outlines by default');
+      await page.click('#outlines');
+      const total = Number((/\((\d+)\)/.exec(await page.$eval('label[for=mode-filter]', (e) => e.textContent)) || [])[1]);
+      pdf = await generate();
+      const pages = rectsOf(pdf);
+      assert.equal(pdf.pages, Math.ceil(total / 12));
+      assert.equal(pages.length, pdf.pages);
+      const { presetById, labelRect: lr } = await import('../../public/labels.js');
+      for (const rs of pages) {
+        assert.equal(rs.length, 12, 'one outline per slot on every page, including empty slots');
+        rs.forEach((r, i) => {
+          const e = lr(i, presetById('l7177'));
+          assert.ok(near(r.x, e.x) && near(r.y, e.y) && near(r.w, e.w) && near(r.h, e.h), `outline ${i}: ${JSON.stringify(r)} vs ${JSON.stringify(e)}`);
+        });
+      }
+      assert.match(pdf.bytes, /0\.75 G/, 'light grey stroke colour');
+      assert.match(await notice(), /on \d+ sheets?\./);
+      await page.click('#outlines');
+    });
+
+    it('printer shift: validated, remembered, and a 2 mm shift moves every text and outline position by exactly 2 mm', async () => {
+      assert.equal(await page.$eval('#shift_x', (e) => e.value), '0');
+      assert.equal(await page.$eval('#shift_y', (e) => e.value), '0');
+      assert.equal(await page.$eval('label[for=shift_x]', (e) => e.textContent), 'Shift right (mm)');
+      assert.equal(await page.$eval('label[for=shift_y]', (e) => e.textContent), 'Shift down (mm)');
+      await page.click('#outlines');
+      const base = await generate();
+      await fill('#shift_x', '2');
+      const right = await generate();
+      await fill('#shift_x', '0'); await fill('#shift_y', '1.5');
+      const down = await generate();
+      assert.equal(base.pages, right.pages);
+      const flat = (p) => p.texts.flat();
+      assert.equal(flat(base).length, flat(right).length);
+      flat(base).forEach((t, i) => {
+        assert.ok(near(flat(right)[i].xmm - t.xmm, 2, 0.005), `text x moved by 2 mm: ${flat(right)[i].xmm - t.xmm}`);
+        assert.ok(near(flat(right)[i].ypt, t.ypt, 0.001), 'text y unchanged by a horizontal shift');
+        assert.ok(near(t.ypt - flat(down)[i].ypt, 1.5 / MM, 0.001), 'a 1.5 mm shift down lowers the text by 1.5 mm');
+        assert.ok(near(flat(down)[i].xmm, t.xmm, 0.005));
+      });
+      rectsOf(base).flat().forEach((r, i) => {
+        const rr = rectsOf(right).flat()[i], dd = rectsOf(down).flat()[i];
+        assert.ok(near(rr.x - r.x, 2, 0.005) && near(rr.y, r.y, 0.005) && near(rr.w, r.w, 0.005), 'outline moved right by 2 mm, same size');
+        assert.ok(near(dd.y - r.y, 1.5, 0.005) && near(dd.x, r.x, 0.005), 'outline moved down by 1.5 mm');
+      });
+      // negative and decimal values work; out-of-range and junk are refused with a message and no PDF
+      await fill('#shift_x', '-1.25'); await fill('#shift_y', '0');
+      const left = await generate();
+      assert.ok(near(flat(left)[0].xmm - flat(base)[0].xmm, -1.25, 0.005));
+      for (const bad of ['5.5', '-6', '1e1', '']) {
+        if (bad === '') await clearField('#shift_x'); else await fill('#shift_x', bad);
+        await until(() => document.getElementById('shift_x-err').textContent.length > 0);
+        for (const f of pdfFiles()) rmSync(join(dlDir, f));
+        await page.evaluate(() => { document.querySelector('form p.error')?.remove(); });
+        await page.click('form button[type=submit]');
+        await until(() => document.querySelector('p.error')?.textContent.startsWith('Fix the fine-tune shift first.'));
+        assert.equal(await page.$eval('#shift_x', (e) => e.getAttribute('aria-invalid')), 'true');
+        await new Promise((r) => setTimeout(r, 300));
+        assert.deepEqual(pdfFiles(), []);
+      }
+      // remembered across a reload
+      await fill('#shift_x', '2'); await fill('#shift_y', '-0.5');
+      await page.reload();
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#shift_x', (e) => e.value), '2');
+      assert.equal(await page.$eval('#shift_y', (e) => e.value), '-0.5');
+      await fill('#shift_x', '0'); await fill('#shift_y', '0');
+      await page.click('#outlines');
+    });
+
+    it('360 px wide: Labels view with the 12-up layout and with Custom open has no horizontal scroll, labelled inputs and 44 px controls', async () => {
+      await page.setViewport({ width: 360, height: 800 });
+      await page.reload();
+      await waitH1('Print labels');
+      const probe = () => page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        small: [...document.querySelectorAll('main button, main input:not([type=checkbox]):not([type=radio]), main select, main a.btn')]
+          .filter((e) => e.getBoundingClientRect().height > 0 && e.getBoundingClientRect().height < 44)
+          .map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}:${Math.round(e.getBoundingClientRect().height)}px`),
+        unlabelled: [...document.querySelectorAll('main input, main select')].filter((e) => !e.labels || e.labels.length === 0).map((e) => e.id || e.type),
+        wide: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > 361).slice(0, 5).map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`),
+      }));
+      await setLayout('l7177');
+      await new Promise((r) => setTimeout(r, 300));
+      if (process.env.UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.UI_SCREENSHOTS, 'labels-360-12up.png'), fullPage: true });
+      let m = await probe();
+      assert.deepEqual(m, { sw: 360, small: [], unlabelled: [], wide: [] }, '12-up');
+      await page.select('#layout', 'custom');
+      await fill('#custom_labelW', '120');
+      await until(() => document.getElementById('custom_labelW-err').textContent.length > 0);
+      await new Promise((r) => setTimeout(r, 300));
+      if (process.env.UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.UI_SCREENSHOTS, 'labels-360-custom.png'), fullPage: true });
+      m = await probe();
+      assert.deepEqual(m, { sw: 360, small: [], unlabelled: [], wide: [] }, 'Custom open with an error showing');
+      await fill('#custom_labelW', '99.1');
+      await page.select('#layout', 'l7177');
+      await page.setViewport({ width: 390, height: 800 });
+    });
+  });
+
+  // ---------- Excel export ----------
+  describe('excel export', () => {
+    const xlsxFiles = () => readdirSync(dlDir).filter((f) => f.endsWith('.xlsx')).sort();
+    const resetXlsx = () => { for (const f of xlsxFiles()) rmSync(join(dlDir, f)); };
+    async function waitXlsx() {
+      for (let i = 0; i < 100; i++) {
+        const f = xlsxFiles();
+        if (f.length) {
+          await new Promise((r) => setTimeout(r, 300));
+          return { name: f[0], path: join(dlDir, f[0]), bytes: readFileSync(join(dlDir, f[0])) };
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error(`no .xlsx arrived; files: ${readdirSync(dlDir)}`);
+    }
+    const py = spawnSync('python3', ['-I', '-c', 'import openpyxl'], { encoding: 'utf8' });
+    const hasOpenpyxl = py.status === 0;
+    /** Open with openpyxl: header, data rows as [value, data_type] pairs. */
+    function readWithOpenpyxl(path) {
+      const script = `
+import sys, json, openpyxl
+ws = openpyxl.load_workbook(sys.argv[1])['Addresses']
+print(json.dumps({'header': [c.value for c in ws[1]], 'rows': [[[c.value, c.data_type] for c in r] for r in ws.iter_rows(min_row=2)], 'freeze': ws.freeze_panes}, ensure_ascii=False))`;
+      const r = spawnSync('python3', ['-I', '-c', script, path], { encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    }
+    const HEADER = ['First name', 'Surname', 'Address line 1', 'Address line 2', 'Landmark', 'City', 'State', 'PIN', 'Phone', 'Email', 'Group', 'Notes', 'Added by'];
+    const flashText = () => page.$eval('.notice[role=status]', (e) => e.textContent);
+
+    it('More menu: "Export to Excel (.xlsx)" downloads addresses.xlsx with every address; PIN keeps its leading zero and "=" stays text', async () => {
+      const r = await api.post('/api/addresses', { ...ADDR, first_name: '=SUM(1,2)', surname: 'Amp & <Lt> \u00dcn\u00ef', pin: '012345', phone: '9000000012', group_name: 'Excel', notes: 'Line1\nLine2' });
+      assert.equal(r.status, 201, r.text);
+      const total = (await api.get('/api/addresses')).json.addresses.length;
+      await goHash('#/');
+      await waitH1('Addresses');
+      resetXlsx();
+      await menuGo('Export to Excel (.xlsx)');
+      const f = await waitXlsx();
+      assert.equal(f.name, 'addresses.xlsx');
+      assert.equal(f.bytes.subarray(0, 2).toString('latin1'), 'PK', 'ZIP signature');
+      await until((t) => document.querySelector('.notice[role=status]')?.textContent === t, `Created addresses.xlsx: ${total} addresses.`);
+      assert.equal(await page.$eval('#more-menu', (e) => e.hidden), true, 'menu closes after choosing');
+      if (hasOpenpyxl) {
+        const o = readWithOpenpyxl(f.path);
+        assert.deepEqual(o.header, HEADER);
+        assert.equal(o.rows.length, total);
+        assert.equal(o.freeze, 'A2');
+        const row = o.rows.find((x) => x[1][0].startsWith('Amp'));
+        assert.deepEqual(row[0], ['=SUM(1,2)', 's']);
+        assert.equal(row[1][0], 'Amp & <Lt> \u00dcn\u00ef');
+        assert.deepEqual(row[7], ['012345', 's']);
+        assert.deepEqual(row[8], ['9000000012', 's']);
+        assert.equal(row[11][0], 'Line1\nLine2');
+        assert.equal(row[12][0], 'Owner');
+      }
+    });
+
+    it('Labels view: "Export these addresses to Excel" exports exactly the set that would be printed (search, everything, selected)', async () => {
+      // 1) a search
+      await goHash('#/');
+      await waitH1('Addresses');
+      await until(() => document.querySelector('#q'));
+      await fill('#q', ''); await page.type('#q', '<Lt>');
+      await listIs(1);
+      await clickText('#top a', 'Labels');
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#labels-export-xlsx', (e) => e.textContent), 'Export these addresses to Excel');
+      resetXlsx();
+      await page.click('#labels-export-xlsx');
+      let f = await waitXlsx();
+      assert.equal(f.name, 'addresses-selected.xlsx');
+      assert.equal(f.bytes.subarray(0, 2).toString('latin1'), 'PK');
+      assert.equal(await flashText(), 'Created addresses-selected.xlsx: 1 address.');
+      if (hasOpenpyxl) {
+        const o = readWithOpenpyxl(f.path);
+        assert.equal(o.rows.length, 1);
+        assert.deepEqual(o.rows[0][0], ['=SUM(1,2)', 's']);
+      }
+      // 2) everything (no search): same file name as the More menu export
+      await clickText('#top a', 'Addresses'); await waitH1('Addresses');
+      await fill('#q', ''); await page.type('#q', ' ');
+      await page.select('#group', '');
+      const total = (await api.get('/api/addresses')).json.addresses.length;
+      await until(() => /^\d+ addresses$/.test(document.querySelector('p[role=status]')?.textContent || ''));
+      assert.equal(await status(), `${total} addresses`, 'the list shows every address');
+      await clickText('#top a', 'Labels');
+      await waitH1('Print labels');
+      resetXlsx();
+      await page.click('#labels-export-xlsx');
+      f = await waitXlsx();
+      assert.equal(f.name, 'addresses.xlsx');
+      if (hasOpenpyxl) assert.equal(readWithOpenpyxl(f.path).rows.length, total);
+      // 3) ticked entries only
+      await clickText('#top a', 'Addresses'); await waitH1('Addresses');
+      await until(() => document.querySelector('input[aria-label="Select Bulk03 Label"]'));
+      await page.click('input[aria-label="Select Bulk03 Label"]');
+      await page.click('input[aria-label="Select Bulk05 Label"]');
+      await until(() => document.querySelector('.selbar').getAnimations().every((x) => x.playState === 'finished'));
+      await clickText('.selbar a', 'Print labels');
+      await waitH1('Print labels');
+      assert.equal(await page.$eval('#mode-ticked', (e) => e.checked), true);
+      resetXlsx();
+      await page.click('#labels-export-xlsx');
+      f = await waitXlsx();
+      assert.equal(f.name, 'addresses-selected.xlsx');
+      assert.equal(f.bytes.subarray(0, 2).toString('latin1'), 'PK');
+      assert.equal(await flashText(), 'Created addresses-selected.xlsx: 2 addresses.');
+      if (hasOpenpyxl) {
+        const o = readWithOpenpyxl(f.path);
+        assert.deepEqual(o.rows.map((r) => r[0][0]).sort(), ['Bulk03', 'Bulk05']);
+        assert.deepEqual(o.rows.map((r) => r[7][0]), ['560001', '560001']);
+      }
+      // nothing ticked -> message, no file
+      await clickText('#top a', 'Addresses'); await waitH1('Addresses');
+      await until(() => document.querySelector('.selbar') && !document.querySelector('.selbar').hidden);
+      await until(() => document.querySelector('.selbar').getAnimations().every((x) => x.playState === 'finished'));
+      await clickText('.selbar button', 'Clear');
+      await clickText('#top a', 'Labels'); await waitH1('Print labels');
+      await page.click('#mode-ticked');
+      resetXlsx();
+      await page.click('#labels-export-xlsx');
+      await until(() => document.querySelector('p.error')?.textContent === 'No addresses are selected.');
+      await new Promise((r) => setTimeout(r, 300));
+      assert.deepEqual(xlsxFiles(), []);
+      assert.equal(hasOpenpyxl, true, 'openpyxl was available, so the files above were opened with a real reader');
     });
   });
 

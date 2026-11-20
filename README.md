@@ -2,7 +2,7 @@
 
 A small, private address book for a family. Everyone who is invited can keep postal
 addresses in one place and print them as sticker labels for postcards (A4 sheets,
-21 labels per sheet). It runs entirely on Cloudflare's free plan: static files plus a
+12 or 21 labels per sheet). It runs entirely on Cloudflare's free plan: static files plus a
 few serverless functions plus a small SQLite database (Cloudflare D1). There is no build
 step and nothing to install on a server.
 
@@ -23,7 +23,7 @@ step and nothing to install on a server.
 - Saving a phone number that already exists shows a warning with the existing entry; you
   can still choose "Save anyway".
 - Search by name, surname, city, PIN or phone; filter by group.
-- PDF sticker labels (A4, 3 x 7 labels of 63.5 x 38.1 mm, Avery L7160 style): print
+- PDF sticker labels (A4; 21-up L7160 or several 12-up layouts, or a custom sheet): print
   everything in the current search/filter or only selected entries, optionally start at
   label N to reuse a partly used sheet, optionally include the phone number.
 - CSV export of all addresses, for any signed-in user (also your backup, see below).
@@ -260,18 +260,46 @@ Users cannot be deleted, and the owner cannot be disabled.
 1. On **Addresses**, search or filter as needed, and tick the boxes of entries if you want
    to print only some of them. A bar at the bottom shows how many are selected; its
    **Print labels** button opens the Labels page.
-2. Open **Labels**. Choose "current search/filter" or "only selected addresses", set "Start
+2. Open **Labels**. Under **Label sheet** pick the sticker sheet you bought. It starts on
+   12 per sheet, 2 x 6, 99.1 x 42.3 mm (L7177); the other choices are 21 per sheet
+   (3 x 7, 63.5 x 38.1 mm, L7160), 12 per sheet 3 x 4 (63.5 x 72 mm, L7164), and three
+   2 x 6 sheets of 105 x 48, 105 x 49.5 (edge to edge) and 100 x 44 mm. If yours is none of
+   these, choose **Custom** and enter the columns, rows, label size, top and left margin and the
+   gaps in millimetres; choosing Custom first fills the fields with the sheet you had selected, so
+   you can nudge it by a millimetre. Sizes that do not fit on A4 are refused with a message. Your
+   choice and custom sizes are remembered in this browser.
+   Then choose "current search/filter" or "only selected addresses", set "Start
    at label" if the sheet is partly used (for example 4 to skip the first three labels; you
    can also tap the first empty label on the sheet picture, which shows where each label
-   will go), and tick "Include phone number" if wanted.
+   will go; the number is limited to the labels on the chosen sheet), and tick
+   "Include phone number" if wanted.
 3. Press **Download PDF**.
-4. Open the PDF and print on **A4** label sheets of 21 labels (3 columns x 7 rows,
-   63.5 x 38.1 mm, Avery L7160 style). In the print dialog set scale to **100% / "Actual
-   size"** and turn off **"Fit to page"** and any "shrink to printable area" option;
-   otherwise the text will drift off the labels. Print a test page on plain paper first
-   and hold it against a label sheet up to a window or lamp to check the alignment.
+4. Open the PDF and print on **A4** label sheets. In the print dialog set scale to **100% /
+   "Actual size"** and turn off **"Fit to page"** and any "shrink to printable area" option;
+   otherwise the text will drift off the labels.
+
+**Test print.** Tick **Draw label outlines (for a test print on plain paper)** and download the
+PDF: a thin grey rectangle is drawn around every label slot of every page (empty ones too). Print
+it on plain paper at 100% and hold it against a sticker sheet up to a window or lamp. If
+everything is a little off in the same direction, use **Shift right (mm)** / **Shift down (mm)**
+(each -5 to 5, decimals allowed, remembered in this browser) to move all labels and outlines
+without changing the layout. Text starts 3 mm inside each label (4 mm on labels at least 90 mm
+wide); on sheets with no margin at the paper edge, many printers cannot print that close to the
+edge, so check the test print. Layout sizes come from the sheet makers' published figures or the
+owner's measurements; always confirm with a test print.
 
 Long lines wrap, and the text shrinks if an entry would not otherwise fit on a label.
+
+### Excel export
+
+**More > Export to Excel (.xlsx)** downloads every address as `addresses.xlsx`. On the Labels
+page, **Export these addresses to Excel** exports exactly the set that would be printed (the
+current search/filter or the selected addresses, file `addresses-selected.xlsx` for a subset).
+The file is built in the browser (no server involved) by `public/xlsx.js`, a small writer with
+a store-only ZIP container; there is no dependency. Columns: First name, Surname, Address
+line 1, Address line 2, Landmark, City, State, PIN, Phone, Email, Group, Notes, Added by. Every
+cell is text, so PIN and phone keep leading zeros and a value starting with `=` stays text
+(Excel may show a "number stored as text" marker on PIN and phone, which is harmless).
 
 ### Backup
 
@@ -307,7 +335,7 @@ for Pages, Workers and D1 have the current figures.
 ## Project layout
 
 ```
-public/           static app (index.html, app.js, labels.js, styles.css, _headers) and vendored jsPDF
+public/           static app (index.html, app.js, labels.js, xlsx.js, styles.css, _headers) and vendored jsPDF
 functions/api/    Pages Functions (the JSON API)
 functions/_lib/   shared auth, validation, crypto and HTTP helpers
 migrations/       D1 SQL migrations

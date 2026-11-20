@@ -1,8 +1,11 @@
 // Family Address Book - hash-routed single-page app. No framework.
 // All user data is inserted with textContent / DOM APIs only (never innerHTML).
 import {
-  PER_SHEET, LABEL_W, LABEL_H, labelRect, planLabels, addressLines, fitText, lineHeightMm,
+  PAGE_W, PAGE_H, PRESETS, CHOOSER_PRESETS, UI_DEFAULT_ID, CUSTOM_ID, DEFAULT_LAYOUT, LAYOUT_FIELDS, parseShift, presetById, perSheet, labelRect, planLabels,
+  validateLayout, customLayout, layoutToValues, describeLayout, startFontSize, labelPadding,
+  addressLines, fitText, lineHeightMm,
 } from '/labels.js';
+import { addressesToXlsx, XLSX_MIME } from '/xlsx.js';
 
 const mainEl = document.getElementById('app');
 let appEl = mainEl; // per-route container, so a stale async view cannot write into a newer page
@@ -180,6 +183,7 @@ function renderTop() {
       item('#/users', 'Users', /^#\/users/),
       item('#/password', 'Change password', /^#\/password/),
       item('/api/export.csv', 'Export CSV', null, { download: 'addresses.csv' }),
+      h('li', null, h('button', { type: 'button', onclick: () => { if (closeMenu) closeMenu(true); exportAllToExcel(); }, text: 'Export to Excel (.xlsx)' })),
       h('li', { class: 'sep' }, h('button', { type: 'button', onclick: logout, text: 'Log out' }))));
   const wrap = h('div', { class: 'more' }, btn, panel);
 
@@ -217,12 +221,12 @@ async function logout() {
 
 function errorBox(msg) { return h('p', { class: 'error', role: 'alert', text: msg }); }
 
-function field({ id, label, type = 'text', value = '', autocomplete, inputmode, required, maxlength, list, error, textarea, hint, cls }) {
+function field({ id, label, type = 'text', value = '', autocomplete, inputmode, required, maxlength, list, error, textarea, hint, cls, step, min }) {
   const errId = `${id}-err`;
   const hintId = hint ? `${id}-hint` : null;
   const describedBy = [hintId, error ? errId : null].filter(Boolean).join(' ') || undefined;
   const attrs = {
-    id, name: id, value: textarea ? undefined : value, autocomplete, inputmode, maxlength, list,
+    id, name: id, value: textarea ? undefined : value, autocomplete, inputmode, maxlength, list, step, min,
     type: textarea ? undefined : type, required: required ? true : undefined,
     'aria-invalid': error ? 'true' : undefined,
     'aria-describedby': describedBy,
@@ -260,6 +264,65 @@ async function copyText(text, input) {
       return document.execCommand('copy');
     } catch { return false; }
   }
+}
+
+// A short message shown at the top of the page (for actions started from the More menu).
+// Navigating to another view replaces the whole page content, which removes it.
+let flashEl = null;
+let flashTimer = 0;
+function flash(message, isError) {
+  if (flashEl) flashEl.remove();
+  flashEl = h('div', { class: isError ? 'error' : 'notice', role: isError ? 'alert' : 'status', text: message });
+  mainEl.prepend(flashEl);
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { if (flashEl) flashEl.remove(); flashEl = null; }, 8000);
+}
+
+/** Save bytes as a file through a Blob URL and a temporary <a download> (allowed by the page's CSP). */
+function downloadBytes(bytes, filename, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const a = h('a', { href: url, download: filename, hidden: true });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+/** Build and download an .xlsx of the given address records. Returns the number of rows. */
+function downloadXlsx(addresses, filename) {
+  downloadBytes(addressesToXlsx(addresses), filename, XLSX_MIME);
+  return addresses.length;
+}
+
+async function exportAllToExcel() {
+  try {
+    const all = (await api('GET', '/api/addresses')).addresses || [];
+    if (!all.length) { flash('There are no addresses to export.', true); return; }
+    downloadXlsx(all, 'addresses.xlsx');
+    flash(`Created addresses.xlsx: ${plural(all.length, 'address', 'addresses')}.`);
+  } catch (err) {
+    if (err.status !== 401) flash(`Could not create the Excel file: ${err.message}`, true);
+  }
+}
+
+// ---------- remembered label layout (per browser; localStorage may be unavailable) ----------
+const LAYOUT_STORE_KEY = 'fab.labelLayout';
+function loadLayoutPrefs() {
+  try {
+    const o = JSON.parse(localStorage.getItem(LAYOUT_STORE_KEY));
+    if (!o || typeof o !== 'object') return null;
+    const id = o.id === CUSTOM_ID || presetById(o.id) ? o.id : null;
+    let custom = null;
+    if (o.custom && typeof o.custom === 'object') {
+      custom = {};
+      for (const { key } of LAYOUT_FIELDS) custom[key] = typeof o.custom[key] === 'string' ? o.custom[key].slice(0, 12) : '';
+    }
+    const str = (v) => (typeof v === 'string' ? v.slice(0, 12) : '0');
+    return { id, custom, shiftX: str(o.shiftX), shiftY: str(o.shiftY) };
+  } catch { return null; }
+}
+function saveLayoutPrefs(id, custom, shiftX, shiftY) {
+  try { localStorage.setItem(LAYOUT_STORE_KEY, JSON.stringify({ id, custom, shiftX, shiftY })); } catch { /* storage unavailable: just don't remember */ }
 }
 
 // ---------- views ----------
@@ -602,32 +665,79 @@ async function viewLabels() {
   const filterDesc = params.toString()
     ? `Current search/filter (${filtered.length})` : `Everything in the current list (${filtered.length})`;
 
+  // Remembered layout: a preset id or "custom", plus the text of the custom fields.
+  const prefs = loadLayoutPrefs();
+  const customValues = prefs && prefs.custom ? prefs.custom : layoutToValues(presetById(UI_DEFAULT_ID));
+  const shiftValues = { x: prefs ? prefs.shiftX : '0', y: prefs ? prefs.shiftY : '0' };
+  let layoutId = prefs && prefs.id ? prefs.id : UI_DEFAULT_ID;
+  if (layoutId === CUSTOM_ID && !validateLayout(customLayout(customValues)).ok) layoutId = UI_DEFAULT_ID;
+  const save = () => saveLayoutPrefs(layoutId, customValues, shiftValues.x, shiftValues.y);
+  /** The layout in force, and whether it is usable (a custom layout can be mid-edit and invalid). */
+  const currentLayout = () => (layoutId === CUSTOM_ID ? customLayout(customValues) : presetById(layoutId));
+  const currentCheck = () => validateLayout(currentLayout());
+  const perNow = () => (currentCheck().ok ? perSheet(currentLayout()) : 0);
+
   const msg = h('div', { class: 'msg' });
-  const startInput = h('input', { id: 'start_at', type: 'number', inputmode: 'numeric', min: 1, max: PER_SHEET, value: 1, 'aria-describedby': 'start-hint' });
+  const startInput = h('input', { id: 'start_at', type: 'number', inputmode: 'numeric', min: 1, max: 21, value: 1, 'aria-describedby': 'start-hint' });
+  const startLabel = h('label', { for: 'start_at' });
   const phoneBox = h('input', { type: 'checkbox', id: 'include_phone' });
+  const outlineBox = h('input', { type: 'checkbox', id: 'outlines' });
   const preferTicked = tickedList.length > 0;
   const modeFilter = h('input', { type: 'radio', name: 'mode', id: 'mode-filter', value: 'filter', checked: preferTicked ? undefined : true });
   const modeTicked = h('input', { type: 'radio', name: 'mode', id: 'mode-ticked', value: 'ticked', checked: preferTicked ? true : undefined });
   if (!tickedList.length && selected.size === 0) modeTicked.setAttribute('aria-describedby', 'ticked-hint');
   const btn = h('button', { type: 'submit', class: 'primary', text: 'Download PDF' });
+  const xlsxBtn = h('button', { type: 'button', id: 'labels-export-xlsx', text: 'Export these addresses to Excel' });
+
+  // Layout chooser.
+  const layoutSel = h('select', { id: 'layout', name: 'layout', 'aria-describedby': 'layout-desc' },
+    CHOOSER_PRESETS.map((p) => h('option', { value: p.id, text: p.name })),
+    h('option', { value: CUSTOM_ID, text: 'Custom (enter your own sizes)' }));
+  layoutSel.value = layoutId;
+  const layoutDesc = h('p', { class: 'hint', id: 'layout-desc' });
+  const customBox = h('div', { class: 'custom-sheet', id: 'custom-sheet', hidden: layoutId !== CUSTOM_ID },
+    h('p', { class: 'hint', id: 'custom-hint', text: 'Measure your sticker sheet in millimetres. Decimals are fine. The left margin is the space from the paper edge to the first label.' }),
+    h('div', { class: 'custom-grid' },
+      LAYOUT_FIELDS.map(({ key, label, integer }) => field({
+        id: `custom_${key}`, label, type: 'number', step: integer ? 1 : 'any', min: 0,
+        inputmode: integer ? 'numeric' : 'decimal', value: customValues[key], cls: 'num',
+      }))));
 
   // On-screen preview of sheet 1 (pure DOM; the PDF is built separately by buildPdf).
-  const slots = [];
+  // Slot positions are CSS custom properties (set through the CSSOM, which the page's CSP allows) in % of the A4 page.
+  let slots = [];
   const sheet = h('div', { class: 'sheet', 'aria-hidden': 'true' });
-  for (let i = 1; i <= PER_SHEET; i++) {
-    const slot = h('div', { class: 'slot', 'data-slot': i }, h('span', { class: 'slot-n', text: String(i) }), h('span', { class: 'slot-name' }));
-    slot.addEventListener('click', () => { startInput.value = String(i); updatePreview(); });
-    slots.push(slot);
-    sheet.append(slot);
-  }
   const sheetNote = h('p', { class: 'sheet-note', id: 'sheet-note', 'aria-live': 'polite' });
+  const renderSheet = () => {
+    clear(sheet);
+    slots = [];
+    const layout = currentLayout();
+    sheet.dataset.cols = currentCheck().ok ? String(layout.cols) : '0';
+    sheet.dataset.rows = currentCheck().ok ? String(layout.rows) : '0';
+    if (!currentCheck().ok) return;
+    const pct = (mm, of) => `${((mm / of) * 100).toFixed(3)}%`;
+    for (let i = 0; i < perSheet(layout); i++) {
+      const r = labelRect(i, layout);
+      const slot = h('div', { class: 'slot', 'data-slot': i + 1 }, h('span', { class: 'slot-n', text: String(i + 1) }), h('span', { class: 'slot-name' }));
+      slot.style.setProperty('--x', pct(r.x, PAGE_W));
+      slot.style.setProperty('--y', pct(r.y, PAGE_H));
+      slot.style.setProperty('--w', pct(r.w, PAGE_W));
+      slot.style.setProperty('--h', pct(r.h, PAGE_H));
+      slot.addEventListener('click', () => { startInput.value = String(i + 1); updatePreview(); });
+      slots.push(slot);
+      sheet.append(slot);
+    }
+  };
 
   const updatePreview = () => {
     const list = modeTicked.checked ? tickedList : filtered;
+    const per = perNow();
+    if (!per) { sheetNote.textContent = 'Fix the sheet sizes above to see where the labels go.'; return; }
+    const layout = currentLayout();
     const raw = startInput.value.trim();
     const start = Number(raw);
-    const valid = /^\d+$/.test(raw) && start >= 1 && start <= PER_SHEET;
-    const plan = valid ? planLabels(list.length, start) : [];
+    const valid = /^\d+$/.test(raw) && start >= 1 && start <= per;
+    const plan = valid ? planLabels(list.length, start, layout) : [];
     const onSheet1 = new Map(plan.map((p, i) => [p, i]).filter(([p]) => p.sheet === 0).map(([p, i]) => [p.slot, list[i]]));
     slots.forEach((el, idx) => {
       const a = onSheet1.get(idx);
@@ -635,7 +745,7 @@ async function viewLabels() {
       el.classList.toggle('is-filled', !!a);
       el.lastChild.textContent = a ? fullName(a) : '';
     });
-    if (!valid) { sheetNote.textContent = `Enter a label number from 1 to ${PER_SHEET} to see where the labels go.`; return; }
+    if (!valid) { sheetNote.textContent = `Enter a label number from 1 to ${per} to see where the labels go.`; return; }
     if (!list.length) { sheetNote.textContent = modeTicked.checked ? 'No addresses are selected yet.' : 'There are no addresses to print.'; return; }
     const first = onSheet1.size;
     const sheets = plan[plan.length - 1].sheet + 1;
@@ -645,6 +755,40 @@ async function viewLabels() {
     if (sheets > 1) note += ` ${plural(list.length - first, 'more label goes', 'more labels go')} on ${sheets === 2 ? 'sheet 2' : `sheets 2 to ${sheets}`}.`;
     sheetNote.textContent = note;
   };
+
+  /** Called whenever the chosen layout (or a custom value) changes. */
+  const applyLayout = ({ clampStart } = {}) => {
+    const check = currentCheck();
+    const per = perNow();
+    layoutDesc.textContent = check.ok ? describeLayout(currentLayout()) : 'Fix the sizes below to continue.';
+    customBox.hidden = layoutId !== CUSTOM_ID;
+    startLabel.textContent = per ? `Start at label (1 to ${per})` : 'Start at label';
+    startInput.max = String(per || 1);
+    if (per && clampStart) {
+      const n = Number(startInput.value);
+      if (Number.isFinite(n) && n > per) startInput.value = String(per);
+    }
+    renderSheet();
+    updatePreview();
+  };
+
+  const showCustomErrors = () => {
+    const errs = layoutId === CUSTOM_ID ? currentCheck().errors : {};
+    for (const { key } of LAYOUT_FIELDS) setFieldError(form, `custom_${key}`, errs[key]);
+  };
+
+  layoutSel.addEventListener('change', () => {
+    const prev = currentLayout();
+    layoutId = layoutSel.value;
+    if (layoutId === CUSTOM_ID && validateLayout(prev).ok) {
+      // Switching to Custom: start from the sheet that was selected, so only the differences need typing.
+      Object.assign(customValues, layoutToValues(prev));
+      for (const { key } of LAYOUT_FIELDS) form.elements[`custom_${key}`].value = customValues[key];
+    }
+    save();
+    showCustomErrors();
+    applyLayout({ clampStart: true });
+  });
   startInput.addEventListener('input', updatePreview);
   modeFilter.addEventListener('change', updatePreview);
   modeTicked.addEventListener('change', updatePreview);
@@ -652,72 +796,165 @@ async function viewLabels() {
   const form = h('form', { novalidate: true, class: 'panel labels-form' },
     h('div', { class: 'labels-opts' },
       h('fieldset', null,
+        h('legend', { text: 'Label sheet' }),
+        h('div', { class: 'field' },
+          h('label', { for: 'layout', text: 'Sheet layout' }),
+          layoutSel,
+          layoutDesc),
+        customBox,
+        h('div', { class: 'nudge' },
+          h('p', { class: 'hint', id: 'shift-hint', text: 'Fine-tune: if your printer feeds the paper slightly off, move everything a little. Between -5 and 5 mm; minus moves left or up. Leave at 0 otherwise.' }),
+          h('div', { class: 'custom-grid' },
+            field({ id: 'shift_x', label: 'Shift right (mm)', type: 'number', step: 'any', min: -5, inputmode: 'decimal', value: shiftValues.x, cls: 'num' }),
+            field({ id: 'shift_y', label: 'Shift down (mm)', type: 'number', step: 'any', min: -5, inputmode: 'decimal', value: shiftValues.y, cls: 'num' })))),
+      h('fieldset', null,
         h('legend', { text: 'Which addresses' }),
         h('label', { class: 'check choice', for: 'mode-filter' }, modeFilter, h('span', { text: filterDesc })),
         h('label', { class: 'check choice', for: 'mode-ticked' }, modeTicked, h('span', { text: `Only selected addresses (${tickedList.length})` })),
         h('p', { class: 'hint', id: 'ticked-hint', text: 'Select addresses on the Addresses page. To change the search or group, go back to the list.' })),
       h('fieldset', null,
-        h('legend', { text: 'Sheet' }),
+        h('legend', { text: 'Options' }),
         h('div', { class: 'field short' },
-          h('label', { for: 'start_at', text: `Start at label (1 to ${PER_SHEET})` }),
+          startLabel,
           h('div', { class: 'hint', id: 'start-hint', text: 'To reuse a partly used sheet, enter the first empty label, or tap it on the picture. Applies to the first sheet only.' }),
           startInput),
-        h('label', { class: 'check', for: 'include_phone' }, phoneBox, h('span', { text: 'Include phone number' })))),
+        h('label', { class: 'check', for: 'include_phone' }, phoneBox, h('span', { text: 'Include phone number' })),
+        h('label', { class: 'check', for: 'outlines' }, outlineBox, h('span', { text: 'Draw label outlines (for a test print on plain paper)' })))),
     h('figure', { class: 'sheet-figure' },
       h('div', { class: 'sheet-wrap' }, sheet),
       h('figcaption', null, sheetNote)),
     h('div', { class: 'labels-act' },
       msg,
-      h('div', { class: 'actions' }, btn, h('a', { class: 'btn', href: '#/', text: 'Back to list' }))));
+      h('div', { class: 'actions' }, btn),
+      h('p', { class: 'hint print-hint', id: 'print-hint', text: 'When you print, choose 100% or “Actual size”, not “Fit to page”, or the labels will not line up with the stickers.' }),
+      h('div', { class: 'actions' }, xlsxBtn, h('a', { class: 'btn', href: '#/', text: 'Back to list' }))));
+  btn.setAttribute('aria-describedby', 'print-hint');
+
+  // Custom values: remember them, check them as the user types.
+  for (const { key } of LAYOUT_FIELDS) {
+    form.elements[`custom_${key}`].addEventListener('input', (e) => {
+      customValues[key] = e.target.value;
+      save();
+      showCustomErrors();
+      applyLayout({ clampStart: false });
+    });
+  }
+
+  const showShiftErrors = () => {
+    const sh = parseShift(shiftValues.x, shiftValues.y);
+    setFieldError(form, 'shift_x', sh.errors.x);
+    setFieldError(form, 'shift_y', sh.errors.y);
+    return sh;
+  };
+  for (const axis of ['x', 'y']) {
+    form.elements[`shift_${axis}`].addEventListener('input', (e) => {
+      shiftValues[axis] = e.target.value;
+      save();
+      showShiftErrors();
+    });
+  }
+
+  /** Check the layout and the start label. Returns the numbers to print with, or null after showing a message. */
+  const checkInputs = () => {
+    const check = currentCheck();
+    if (!check.ok) {
+      showCustomErrors();
+      const bad = LAYOUT_FIELDS.find(({ key }) => check.errors[key]);
+      msg.append(errorBox(`Fix the sheet sizes first. ${check.message}`));
+      if (bad && layoutId === CUSTOM_ID) form.elements[`custom_${bad.key}`].focus();
+      return null;
+    }
+    const sh = showShiftErrors();
+    if (!sh.ok) {
+      msg.append(errorBox(`Fix the fine-tune shift first. ${sh.errors.x || sh.errors.y}`));
+      form.elements[sh.errors.x ? 'shift_x' : 'shift_y'].focus();
+      return null;
+    }
+    const per = perSheet(currentLayout());
+    const startRaw = startInput.value.trim();
+    const start = Number(startRaw);
+    if (!/^\d+$/.test(startRaw) || start < 1 || start > per) {
+      msg.append(errorBox(`Start label must be a whole number from 1 to ${per}.`));
+      return null;
+    }
+    return { layout: currentLayout(), start, shift: sh.shift };
+  };
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     clear(msg);
     const list = modeTicked.checked ? tickedList : filtered;
     if (!list.length) { msg.append(errorBox(modeTicked.checked ? 'No addresses are selected.' : 'There are no addresses to print.')); return; }
-    const startRaw = startInput.value.trim();
-    const start = Number(startRaw);
-    if (!/^\d+$/.test(startRaw) || start < 1 || start > PER_SHEET) {
-      msg.append(errorBox(`Start label must be a whole number from 1 to ${PER_SHEET}.`));
-      return;
-    }
+    const ok = checkInputs();
+    if (!ok) return;
     const lib = window.jspdf && window.jspdf.jsPDF;
     if (!lib) { msg.append(errorBox('The PDF library did not load. Reload the page and try again.')); return; }
     try {
-      const sheets = buildPdf(lib, list, start, phoneBox.checked);
+      const sheets = buildPdf(lib, list, ok.start, phoneBox.checked, ok.layout, outlineBox.checked, ok.shift);
       msg.append(h('p', { class: 'notice', role: 'status', text: `Created address-labels.pdf: ${list.length} label${list.length === 1 ? '' : 's'} on ${sheets} sheet${sheets === 1 ? '' : 's'}.` }));
     } catch (err) {
       msg.append(errorBox(`Could not create the PDF: ${err.message}`));
     }
   });
 
+  // Exactly the set that would be printed: the selected addresses, or the current search/filter.
+  xlsxBtn.addEventListener('click', () => {
+    clear(msg);
+    const list = modeTicked.checked ? tickedList : filtered;
+    if (!list.length) { msg.append(errorBox(modeTicked.checked ? 'No addresses are selected.' : 'There are no addresses to export.')); return; }
+    const subset = modeTicked.checked || list.length !== all.length;
+    const name = subset ? 'addresses-selected.xlsx' : 'addresses.xlsx';
+    try {
+      downloadXlsx(list, name);
+      msg.append(h('p', { class: 'notice', role: 'status', text: `Created ${name}: ${plural(list.length, 'address', 'addresses')}.` }));
+    } catch (err) {
+      msg.append(errorBox(`Could not create the Excel file: ${err.message}`));
+    }
+  });
+
   appEl.append(h('h1', { text: 'Print labels' }),
-    h('p', { class: 'lede', text: `A4 sticker sheets of ${PER_SHEET} labels (Avery L7160, ${LABEL_W} x ${LABEL_H} mm).` }),
+    h('p', { class: 'lede', text: 'Print addresses onto A4 sticker sheets. Pick the sheet you bought, then download the PDF.' }),
     form);
-  updatePreview();
+  applyLayout({ clampStart: false });
+  showCustomErrors();
 }
 
-const PAD = 3; // mm inner padding
+/** Draw a thin light-grey rectangle around every label slot of the current page. */
+function drawOutlines(doc, layout, shift) {
+  doc.setDrawColor(190);
+  doc.setLineWidth(0.2);
+  for (let i = 0; i < perSheet(layout); i++) {
+    const r = labelRect(i, layout, shift);
+    doc.rect(r.x, r.y, r.w, r.h, 'S');
+  }
+}
 
-function buildPdf(JsPDF, list, startAt, includePhone) {
+function buildPdf(JsPDF, list, startAt, includePhone, layout = DEFAULT_LAYOUT, outlines = false, shift = { x: 0, y: 0 }) {
   const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   const measure = (text, size, bold) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal');
     doc.setFontSize(size);
     return doc.getTextWidth(text);
   };
-  const plan = planLabels(list.length, startAt);
+  const pad = labelPadding(layout);
+  const startSize = startFontSize(layout);
+  const plan = planLabels(list.length, startAt, layout);
   let sheet = 0;
+  if (outlines) drawOutlines(doc, layout, shift);
   list.forEach((a, i) => {
     const { sheet: s, slot } = plan[i];
-    while (sheet < s) { doc.addPage('a4', 'portrait'); sheet += 1; }
-    const r = labelRect(slot);
-    const fit = fitText(addressLines(a, { includePhone }), measure, r.w - 2 * PAD, r.h - 2 * PAD, 11, 5);
+    while (sheet < s) {
+      doc.addPage('a4', 'portrait');
+      sheet += 1;
+      if (outlines) drawOutlines(doc, layout, shift);
+    }
+    const r = labelRect(slot, layout, shift);
+    const fit = fitText(addressLines(a, { includePhone }), measure, r.w - 2 * pad, r.h - 2 * pad, startSize, 5);
     const lh = lineHeightMm(fit.size);
     fit.lines.forEach((line, n) => {
       doc.setFont('helvetica', line.bold ? 'bold' : 'normal');
       doc.setFontSize(fit.size);
-      doc.text(line.text, r.x + PAD, r.y + PAD + n * lh, { baseline: 'top' });
+      doc.text(line.text, r.x + pad, r.y + pad + n * lh, { baseline: 'top' });
     });
   });
   doc.save('address-labels.pdf');

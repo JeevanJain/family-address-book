@@ -10,7 +10,7 @@ print them as PDF sticker labels for postcards. Must cost nothing to run.
 - Database: Cloudflare D1 (SQLite), binding name `DB`. Schema in `migrations/`.
 - Front end: plain HTML + CSS + vanilla JS. No framework, no bundler, no CDN.
   Any third-party library is vendored into `public/vendor/`.
-- PDF: generated in the browser with jsPDF (vendored).
+- PDF: generated in the browser with jsPDF (vendored). Excel: own minimal writer, no library.
 - No Firebase, no paid service, no external API calls at runtime.
 - English only. UI is deliberately plain and mobile-first; visual design comes later,
   so keep CSS small and in one file.
@@ -61,13 +61,26 @@ print them as PDF sticker labels for postcards. Must cost nothing to run.
 - List supports search over name, surname, city, pin, phone, and filter by group.
 - Each entry shows who added it.
 - CSV export of all (non-deleted) addresses for any logged-in user.
+- Excel (.xlsx) export, built in the browser (`public/xlsx.js`, no server work): More menu
+  (all addresses) and Labels view (the set that would be printed). Single sheet "Addresses",
+  bold frozen header, all cells text.
 
 ## PDF labels
 
-- A4 portrait, 21 labels per sheet (3 columns x 7 rows, 63.5 mm x 38.1 mm labels,
-  Avery L7160 geometry: top margin 15.15 mm, side margin 7.25 mm, column gap 2.5 mm, no row gap).
+- A4 portrait. The sheet layout is chosen on the Labels view (default 12 per sheet, 2 x 6,
+  99.1 x 42.3 mm, L7177). Presets (cols x rows, label mm, top / side margin, col gap, row gap
+  in mm): 21-up 3 x 7 63.5 x 38.1 (L7160; 15.15 / 7.25 / 2.5 / 0); 12-up 2 x 6 99.1 x 42.3
+  (L7177; 21.6 / 4.65 / 2.5 / 0); 12-up 3 x 4 63.5 x 72 (L7164; 4.5 / 7.25 / 2.5 / 0); 2 x 6
+  105 x 48 (4.5 / 0 / 0 / 0); 2 x 6 105 x 49.5 edge to edge (0 / 0 / 0 / 0); 2 x 6 100 x 44
+  (16.5 / 4 / 2 / 0). "Custom" takes the same eight numbers, validated to fit A4. The choice,
+  custom values and the shift are remembered per browser (localStorage, optional).
+- "Shift right / down (mm)" (-5..5) offsets all labels and outlines for printer correction.
+- Optional "draw label outlines": thin light-grey rectangle around every slot, for a test print.
+  Print at 100% / Actual size.
+- Font: starts at 11 pt (L7160) growing with label height up to 14 pt, shrinking to fit;
+  padding 3 mm, 4 mm on labels at least 90 mm wide.
 - User chooses: everything in the current search/filter, or ticked entries.
-- Optional "start at label N" so a partly used sheet can be reused.
+- Optional "start at label N" (1 to the labels per sheet) so a partly used sheet can be reused.
 - Label content: full name in bold, address lines, landmark, "City, State", then PIN on its
   own line in bold. Phone optional via a checkbox. Long lines wrap; text shrinks if needed
   so nothing is clipped.

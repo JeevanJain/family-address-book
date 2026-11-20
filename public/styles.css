@@ -441,20 +441,31 @@ ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2)
 }
 .choice:has(input:checked) { border-color: var(--blue); background: var(--blue-tint); }
 .labels-opts .field { margin-top: var(--s1); }
+.labels-opts .check + .check { margin-top: var(--s1); }
+.custom-sheet { margin-top: var(--s2); padding: var(--s3); background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r); }
+.custom-sheet .hint { margin-bottom: var(--s3); }
+/* Two columns even on a phone: eight stacked inputs would be a very long page. */
+.custom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s3); }
+.custom-grid .field { margin-bottom: var(--s3); }
+.custom-grid label { font-size: var(--t-sm); }
+.nudge { margin-top: var(--s3); }
+.print-hint { margin-top: var(--s2); }
 
 .sheet-figure { margin: var(--s2) 0 var(--s4); }
 .sheet-wrap { width: 100%; max-width: 15.5rem; margin: 0 auto; }
-/* A4 proportions in percentages of the sheet width (210 mm): 15.15 mm top, 7.25 mm sides, 2.5 mm column gap. */
+/* The sheet is drawn at A4 proportions; each slot's position and size are set from its layout as
+   --x, --y, --w, --h (percentages of the page) by app.js, so any layout can be shown. */
 .sheet {
+  position: relative;
   width: 100%;
-  padding: 7.214% 3.452%;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 1.279%;
+  aspect-ratio: 210 / 297;
   background: var(--card);
   border: 1px solid var(--line-strong); border-radius: 3px;
   box-shadow: 0 1px 0 var(--line), 0 8px 22px rgba(16, 32, 56, 0.12);
 }
 .slot {
-  position: relative; aspect-ratio: 63.5 / 38.1; min-width: 0;
+  position: absolute; left: var(--x); top: var(--y); width: var(--w); height: var(--h);
+  min-width: 0;
   border: 1px dashed var(--line-strong); border-radius: 4px;
   padding: 0.85rem 0.25rem 0;
   font-size: 0.6rem; line-height: 1.15; color: var(--ink); cursor: pointer; overflow: hidden;
