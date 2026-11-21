@@ -219,8 +219,8 @@ import {
 } from '../../public/labels.js';
 
 describe('layout presets', () => {
-  test('six presets in the agreed order, ids unique, default is L7160', () => {
-    assert.deepEqual(PRESETS.map((p) => p.id), ['l7160', 'l7177', 'l7164', 'w105x48', 'w105x49', 'w100x44']);
+  test('seven presets in the agreed order, ids unique, default is L7160', () => {
+    assert.deepEqual(PRESETS.map((p) => p.id), ['l7160', 'l7177', 'l7164', 'w105x48', 'w105x49', 'w100x44', 'w100x44g3']);
     assert.equal(new Set(PRESETS.map((p) => p.id)).size, PRESETS.length);
     assert.equal(DEFAULT_LAYOUT, PRESETS[0]);
     assert.equal(CUSTOM_ID, 'custom');
@@ -235,6 +235,7 @@ describe('layout presets', () => {
       '12 per sheet, 2 × 6, 105 × 48 mm',
       '12 per sheet, 2 × 6, 105 × 49.5 mm (edge to edge)',
       '12 per sheet, 2 × 6, 100 × 44 mm',
+      '12 per sheet, 2 × 6, 100 × 44 mm, 3 mm row gap, 10 mm top',
     ]);
   });
   test('exact numbers of every preset', () => {
@@ -246,6 +247,7 @@ describe('layout presets', () => {
       [2, 6, 105, 48, 4.5, 0, 0, 0],
       [2, 6, 105, 49.5, 0, 0, 0, 0],
       [2, 6, 100, 44, 16.5, 4, 2, 0],
+      [2, 6, 100, 44, 10, 4, 2, 3],
     ]);
   });
   for (const p of PRESETS) {
@@ -268,7 +270,7 @@ describe('layout presets', () => {
     });
   }
   test('perSheet counts', () => {
-    assert.deepEqual(PRESETS.map((p) => perSheet(p)), [21, 12, 12, 12, 12, 12]);
+    assert.deepEqual(PRESETS.map((p) => perSheet(p)), [21, 12, 12, 12, 12, 12, 12]);
     assert.equal(perSheet(), 21);
   });
 });
@@ -457,12 +459,22 @@ describe('describeLayout / font size / padding', () => {
 import { CHOOSER_PRESETS, UI_DEFAULT_ID, parseShift, MAX_SHIFT } from '../../public/labels.js';
 
 describe('chooser order and screen default', () => {
-  test('the Labels screen defaults to 12 per sheet, 2 x 6, 99.1 x 42.3 mm and lists it first; all presets stay available', () => {
-    assert.equal(UI_DEFAULT_ID, 'l7177');
-    assert.equal(CHOOSER_PRESETS[0].id, 'l7177');
+  test("the Labels screen defaults to the owner's measured sheet and lists it first; all presets stay available", () => {
+    assert.equal(UI_DEFAULT_ID, 'w100x44g3');
+    assert.equal(CHOOSER_PRESETS[0].id, 'w100x44g3');
     assert.deepEqual(CHOOSER_PRESETS.map((p) => p.id).sort(), PRESETS.map((p) => p.id).sort());
-    assert.equal(CHOOSER_PRESETS.length, 6);
-    assert.deepEqual(CHOOSER_PRESETS.slice(1).map((p) => p.id), ['l7160', 'l7164', 'w105x48', 'w105x49', 'w100x44']);
+    assert.equal(CHOOSER_PRESETS.length, 7);
+    assert.deepEqual(CHOOSER_PRESETS.slice(1).map((p) => p.id), ['l7160', 'l7177', 'l7164', 'w105x48', 'w105x49', 'w100x44']);
+  });
+  test("the owner's measured sheet: 10 mm top, 4 mm sides, 100 x 44 mm labels, 2 mm column gap, 3 mm row gap, fits A4", () => {
+    const l = presetById('w100x44g3');
+    assert.deepEqual([l.cols, l.rows, l.labelW, l.labelH, l.topMargin, l.sideMargin, l.colGap, l.rowGap], [2, 6, 100, 44, 10, 4, 2, 3]);
+    assert.ok(validateLayout(l).ok);
+    assert.deepEqual(labelRect(0, l), { x: 4, y: 10, w: 100, h: 44 });
+    assert.deepEqual(labelRect(3, l), { x: 106, y: 57, w: 100, h: 44 });
+    const last = labelRect(11, l);
+    assert.equal(last.y + last.h, 289); // 8 mm left at the bottom
+    assert.equal(last.x + last.w, 206);
   });
   test('functions called without a layout are still L7160', () => {
     assert.equal(DEFAULT_LAYOUT.id, 'l7160');

@@ -19,13 +19,15 @@ export const PRESETS = Object.freeze([
   { id: 'w105x48', name: '12 per sheet, 2 \u00d7 6, 105 \u00d7 48 mm', cols: 2, rows: 6, labelW: 105, labelH: 48, topMargin: 4.5, sideMargin: 0, colGap: 0, rowGap: 0 },
   { id: 'w105x49', name: '12 per sheet, 2 \u00d7 6, 105 \u00d7 49.5 mm (edge to edge)', cols: 2, rows: 6, labelW: 105, labelH: 49.5, topMargin: 0, sideMargin: 0, colGap: 0, rowGap: 0 },
   { id: 'w100x44', name: '12 per sheet, 2 \u00d7 6, 100 \u00d7 44 mm', cols: 2, rows: 6, labelW: 100, labelH: 44, topMargin: 16.5, sideMargin: 4, colGap: 2, rowGap: 0 },
+  // Measured from the owner's own sheet: 1 cm top margin, about 3 mm between rows.
+  { id: 'w100x44g3', name: '12 per sheet, 2 \u00d7 6, 100 \u00d7 44 mm, 3 mm row gap, 10 mm top', cols: 2, rows: 6, labelW: 100, labelH: 44, topMargin: 10, sideMargin: 4, colGap: 2, rowGap: 3 },
 ].map((p) => Object.freeze(p)));
 
 export const CUSTOM_ID = 'custom';
 /** Default for functions called without a layout (kept so existing callers do not change): L7160. */
 export const DEFAULT_LAYOUT = PRESETS[0];
-/** The layout the Labels screen starts with when nothing is remembered: 12 per sheet, 2 x 6, 99.1 x 42.3 mm. */
-export const UI_DEFAULT_ID = 'l7177';
+/** The layout the Labels screen starts with when nothing is remembered: the owner's measured 12-per-sheet layout. */
+export const UI_DEFAULT_ID = 'w100x44g3';
 /** Presets in the order the chooser lists them: the screen default first, the rest in their usual order. */
 export const CHOOSER_PRESETS = Object.freeze([PRESETS.find((p) => p.id === UI_DEFAULT_ID), ...PRESETS.filter((p) => p.id !== UI_DEFAULT_ID)]);
 

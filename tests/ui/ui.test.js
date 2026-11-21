@@ -565,14 +565,14 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       await until(() => document.querySelector('#group option[value=Bulk]'));
     });
 
-    it('with nothing remembered the Labels view starts on 12 per sheet, 2 x 6, 99.1 x 42.3 mm (listed first); 21-up stays available', async () => {
+    it('with nothing remembered the Labels view starts on the measured own-sheet 12-per-sheet layout (listed first); 21-up stays available', async () => {
       await clickText('#top a', 'Labels');
       await waitH1('Print labels');
-      assert.equal(await page.evaluate(() => localStorage.getItem('fab.labelLayout')), null, 'nothing stored yet');
-      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      assert.equal(await page.evaluate(() => localStorage.getItem('fab.labelLayout.v2')), null, 'nothing stored yet');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'w100x44g3');
       const opts = await page.$$eval('#layout option', (o) => o.map((x) => [x.value, x.textContent]));
-      assert.deepEqual(opts[0], ['l7177', '12 per sheet, 2 \u00d7 6, 99.1 \u00d7 42.3 mm (L7177)']);
-      assert.deepEqual(opts.map((o) => o[0]), ['l7177', 'l7160', 'l7164', 'w105x48', 'w105x49', 'w100x44', 'custom']);
+      assert.deepEqual(opts[0], ['w100x44g3', '12 per sheet, 2 \u00d7 6, 100 \u00d7 44 mm, 3 mm row gap, 10 mm top']);
+      assert.deepEqual(opts.map((o) => o[0]), ['w100x44g3', 'l7160', 'l7177', 'l7164', 'w105x48', 'w105x49', 'w100x44', 'custom']);
       assert.ok(opts.some(([v, t]) => v === 'l7160' && t === '21 per sheet, 3 \u00d7 7, 63.5 \u00d7 38.1 mm (L7160)'));
       assert.equal(await page.$$eval('.sheet .slot', (s) => s.length), 12);
       assert.equal(await page.$eval('#start_at', (e) => e.max), '12');
@@ -904,18 +904,18 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       assert.equal((await sheetGeometry()).n, 12);
       assert.equal((await sheetGeometry()).cols, 3);
       // garbage in storage -> default; custom values that no longer fit -> default
-      await page.evaluate(() => localStorage.setItem('fab.labelLayout', '{not json'));
+      await page.evaluate(() => localStorage.setItem('fab.labelLayout.v2', '{not json'));
       await page.reload();
       await waitH1('Print labels');
-      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
-      await page.evaluate(() => localStorage.setItem('fab.labelLayout', JSON.stringify({ id: 'custom', custom: { cols: '9', rows: '9', labelW: '90', labelH: '90', topMargin: '0', sideMargin: '0', colGap: '0', rowGap: '0' } })));
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'w100x44g3');
+      await page.evaluate(() => localStorage.setItem('fab.labelLayout.v2', JSON.stringify({ id: 'custom', custom: { cols: '9', rows: '9', labelW: '90', labelH: '90', topMargin: '0', sideMargin: '0', colGap: '0', rowGap: '0' } })));
       await page.reload();
       await waitH1('Print labels');
-      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
-      await page.evaluate(() => localStorage.setItem('fab.labelLayout', JSON.stringify({ id: 'bogus' })));
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'w100x44g3');
+      await page.evaluate(() => localStorage.setItem('fab.labelLayout.v2', JSON.stringify({ id: 'bogus' })));
       await page.reload();
       await waitH1('Print labels');
-      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'w100x44g3');
       // storage that throws is survived
       await page.evaluateOnNewDocument(() => {
         const boom = () => { throw new DOMException('denied', 'SecurityError'); };
@@ -923,7 +923,7 @@ describe('UI smoke (headless Chrome)', { concurrency: false }, () => {
       });
       await page.reload();
       await waitH1('Print labels');
-      assert.equal(await page.$eval('#layout', (e) => e.value), 'l7177');
+      assert.equal(await page.$eval('#layout', (e) => e.value), 'w100x44g3');
       await page.select('#layout', 'l7164');
       assert.equal((await sheetGeometry()).n, 12, 'still works without storage');
     });

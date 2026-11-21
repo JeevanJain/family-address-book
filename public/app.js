@@ -306,7 +306,7 @@ async function exportAllToExcel() {
 }
 
 // ---------- remembered label layout (per browser; localStorage may be unavailable) ----------
-const LAYOUT_STORE_KEY = 'fab.labelLayout';
+const LAYOUT_STORE_KEY = 'fab.labelLayout.v2'; // v2: new default sheet, so an old remembered choice does not stick
 function loadLayoutPrefs() {
   try {
     const o = JSON.parse(localStorage.getItem(LAYOUT_STORE_KEY));
